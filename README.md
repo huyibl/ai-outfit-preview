@@ -8,9 +8,9 @@
 
 ## 🎬 演示视频
 
-本地录屏文件：`demo/ai-outfit-demo.webm`（由 `npm run demo:video` 生成，含文生图 + 图生图两段）。视频体积较大，不纳入 Git；请上传到 B 站后把链接填到下面。
+操作演示（文生图 + 图生图）：[Bilibili BV1Kv8K6BE3F](https://www.bilibili.com/video/BV1Kv8K6BE3F/)
 
-**Bilibili：** [待上传后填写链接](https://www.bilibili.com)
+本地也可再录一份：`npm run demo:video` 会生成 `demo/ai-outfit-demo.webm`（体积较大，不纳入 Git）。
 
 演示流程：加载示例衣橱 → 女模 → 红大衣 / 灰裙 / 白鞋 / 黑包 → 文生图出图 → 切换图生图再出图 → 保存套装 → 导出备份。
 
@@ -118,7 +118,7 @@ IMAGE_API_KEY=这里粘贴密钥不要加引号
 npm run demo:video
 ```
 
-会写出 `demo/ai-outfit-demo.webm`。把该文件上传到 B 站后，把视频链接贴回本文档「演示视频」一节。
+会写出 `demo/ai-outfit-demo.webm`。当前演示已上传：[Bilibili BV1Kv8K6BE3F](https://www.bilibili.com/video/BV1Kv8K6BE3F/)。
 
 **Quick start**
 
