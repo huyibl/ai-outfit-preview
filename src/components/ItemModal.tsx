@@ -1,0 +1,199 @@
+import { useEffect, useState } from "react";
+import { ITEM_CATEGORIES, ITEM_OCCASIONS, ITEM_SEASONS, CATEGORY_LABELS, OCCASION_LABELS, SEASON_LABELS } from "../lib/labels";
+import { useApp } from "../store";
+import type { Category, Occasion, Season } from "../types";
+
+interface FormState {
+  name: string;
+  category: Category;
+  color: string;
+  season: Season;
+  occasion: Occasion;
+  notes: string;
+  file?: File;
+}
+
+const emptyForm: FormState = {
+  name: "",
+  category: "top",
+  color: "",
+  season: "all",
+  occasion: "daily",
+  notes: "",
+};
+
+export function ItemModal() {
+  const { editor, items, imageUrls, closeEditor, saveItem, removeItem } = useApp();
+  const editing = editor?.kind === "edit" ? items.find((item) => item.id === editor.id) : undefined;
+  const [form, setForm] = useState<FormState>(emptyForm);
+  const [error, setError] = useState("");
+  const [filePreview, setFilePreview] = useState("");
+
+  useEffect(() => {
+    if (!editor) return;
+    setError("");
+    if (editor.kind === "edit") {
+      const item = items.find((entry) => entry.id === editor.id);
+      if (item) {
+        setForm({
+          name: item.name,
+          category: item.category,
+          color: item.color,
+          season: item.season,
+          occasion: item.occasion,
+          notes: item.notes ?? "",
+        });
+        return;
+      }
+    }
+    setForm(emptyForm);
+  }, [editor, items]);
+
+  useEffect(() => {
+    if (!form.file) {
+      setFilePreview("");
+      return;
+    }
+    const url = URL.createObjectURL(form.file);
+    setFilePreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [form.file]);
+
+  if (!editor) return null;
+
+  const preview = filePreview || (editing ? imageUrls[editing.imageId] : "");
+
+  return (
+    <div className="modal-backdrop" onClick={closeEditor}>
+      <form
+        className="modal"
+        data-testid="item-modal"
+        onClick={(event) => event.stopPropagation()}
+        onSubmit={async (event) => {
+          event.preventDefault();
+          try {
+            await saveItem({
+              id: editing?.id,
+              imageId: editing?.imageId,
+              name: form.name.trim(),
+              category: form.category,
+              color: form.color.trim() || "未填色",
+              season: form.season,
+              occasion: form.occasion,
+              notes: form.notes.trim(),
+              file: form.file,
+            });
+          } catch (err) {
+            setError(err instanceof Error ? err.message : "保存失败");
+          }
+        }}
+      >
+        <h2>{editing ? "编辑衣服" : "添加衣服"}</h2>
+        <label className="upload">
+          {preview ? <img src={preview} alt="预览" /> : <span>点击上传图片</span>}
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(event) => setForm((current) => ({ ...current, file: event.target.files?.[0] }))}
+          />
+        </label>
+        <label>
+          名称
+          <input
+            required
+            value={form.name}
+            onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+          />
+        </label>
+        <div className="select-row">
+          <label>
+            品类
+            <select
+              value={form.category}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, category: event.target.value as Category }))
+              }
+            >
+              {ITEM_CATEGORIES.map((category) => (
+                <option key={category} value={category}>
+                  {CATEGORY_LABELS[category]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            颜色
+            <input
+              value={form.color}
+              onChange={(event) => setForm((current) => ({ ...current, color: event.target.value }))}
+            />
+          </label>
+        </div>
+        <div className="select-row">
+          <label>
+            季节
+            <select
+              value={form.season}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, season: event.target.value as Season }))
+              }
+            >
+              {ITEM_SEASONS.map((season) => (
+                <option key={season} value={season}>
+                  {SEASON_LABELS[season]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            场合
+            <select
+              value={form.occasion}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, occasion: event.target.value as Occasion }))
+              }
+            >
+              {ITEM_OCCASIONS.map((occasion) => (
+                <option key={occasion} value={occasion}>
+                  {OCCASION_LABELS[occasion]}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <label>
+          备注
+          <input
+            value={form.notes}
+            onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))}
+          />
+        </label>
+        {error ? <p className="form-error">{error}</p> : null}
+        <div className="modal-actions">
+          {editing ? (
+            <button
+              type="button"
+              className="btn ghost danger"
+              onClick={async () => {
+                await removeItem(editing.id);
+                closeEditor();
+              }}
+            >
+              删除
+            </button>
+          ) : (
+            <span />
+          )}
+          <div className="modal-actions-right">
+            <button type="button" className="btn ghost" onClick={closeEditor}>
+              取消
+            </button>
+            <button type="submit" className="btn primary">
+              保存
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  );
+}
