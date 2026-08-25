@@ -14,7 +14,7 @@ import { deleteImage, getImage, putImage } from "./lib/db";
 import { generatePreview, type GenerateMode } from "./lib/generate/adapter";
 import { createId } from "./lib/ids";
 import { guessFromFilename } from "./lib/guessItem";
-import { MODEL_ASSETS, resolveModelGender, type ModelChoice } from "./lib/models";
+import { resolveModelGender, resolveModelSrc, type ModelChoice } from "./lib/models";
 import { seedIfNeeded } from "./lib/seed";
 import { loadItems, loadOutfits, saveItems, saveOutfits } from "./lib/storage";
 
@@ -26,6 +26,7 @@ interface AppState {
   previewPrompt: string;
   previewSource: "api" | "mock" | null;
   generating: boolean;
+  generateProgress: string | null;
   hydrated: boolean;
   imageUrls: Record<string, string>;
   editor: EditorMode | null;
@@ -50,6 +51,7 @@ type Action =
   | { type: "CLEAR_CANVAS" }
   | { type: "SET_PREVIEW"; url: string; prompt: string; source: "api" | "mock" }
   | { type: "SET_GENERATING"; value: boolean }
+  | { type: "SET_GENERATE_PROGRESS"; text: string | null }
   | { type: "SAVE_OUTFIT" }
   | { type: "LOAD_OUTFIT"; id: string }
   | {
@@ -80,6 +82,7 @@ const initialState: AppState = {
   previewPrompt: "",
   previewSource: null,
   generating: false,
+  generateProgress: null,
   hydrated: false,
   imageUrls: {},
   editor: null,
@@ -87,7 +90,7 @@ const initialState: AppState = {
   notice: null,
   filters: initialFilters,
   modelChoice: "auto",
-  generateMode: "txt2img",
+  generateMode: "tryon",
 };
 
 function revokeAll(urls: Record<string, string>) {
@@ -148,9 +151,16 @@ function reducer(state: AppState, action: Action): AppState {
         previewPrompt: action.prompt,
         previewSource: action.source,
         generating: false,
+        generateProgress: null,
       };
     case "SET_GENERATING":
-      return { ...state, generating: action.value };
+      return {
+        ...state,
+        generating: action.value,
+        generateProgress: action.value ? state.generateProgress : null,
+      };
+    case "SET_GENERATE_PROGRESS":
+      return { ...state, generateProgress: action.text };
     case "SAVE_OUTFIT": {
       const selected = canvasItems(state.canvasIds, state.items);
       if (selected.length === 0) {
@@ -410,8 +420,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const gender = resolveModelGender(state.modelChoice, selectedItems);
       const result = await generatePreview(selectedItems, state.imageUrls, {
         gender,
-        modelSrc: MODEL_ASSETS[gender].src,
+        modelSrc: await resolveModelSrc(gender),
         mode: state.generateMode,
+        onProgress: (text) => dispatch({ type: "SET_GENERATE_PROGRESS", text }),
       });
       dispatch({
         type: "SET_PREVIEW",
@@ -419,16 +430,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
         prompt: result.prompt,
         source: result.source,
       });
-      if (result.source === "api") {
+      if (result.warning) {
+        dispatch({ type: "SET_NOTICE", notice: result.warning });
+      } else if (result.source === "api") {
         dispatch({
           type: "SET_NOTICE",
           notice:
-            state.generateMode === "img2img"
-              ? "图生图已完成（约 ¥0.30/张）"
-              : "文生图已完成（Kolors 免费）",
+            state.generateMode === "tryon"
+              ? "虚拟试衣已完成"
+              : state.generateMode === "img2img"
+                ? `分层换装已完成（约 ¥0.30 × ${selectedItems.length} 件）`
+                : "文生图已完成（Kolors 免费）",
         });
-      } else if (result.warning) {
-        dispatch({ type: "SET_NOTICE", notice: result.warning });
       }
     } catch (error) {
       dispatch({ type: "SET_GENERATING", value: false });

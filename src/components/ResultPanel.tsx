@@ -10,8 +10,9 @@ const MODEL_CHOICES: Array<{ id: ModelChoice; label: string }> = [
 ];
 
 const GEN_MODES: Array<{ id: GenerateMode; label: string; hint: string }> = [
+  { id: "tryon", label: "虚拟试衣", hint: "百炼 AI试衣 Plus · 失败改用 Qwen" },
   { id: "txt2img", label: "文生图", hint: "免费 · Kolors" },
-  { id: "img2img", label: "图生图", hint: "约 ¥0.30/张" },
+  { id: "img2img", label: "图生图", hint: "约 ¥0.30/件 · Qwen 分层换装" },
 ];
 
 export function ResultPanel() {
@@ -20,6 +21,7 @@ export function ResultPanel() {
     previewPrompt,
     previewSource,
     generating,
+    generateProgress,
     generate,
     outfits,
     loadOutfit,
@@ -30,27 +32,54 @@ export function ResultPanel() {
     setGenerateMode,
   } = useApp();
   const [apiReady, setApiReady] = useState(false);
+  const [tryonReady, setTryonReady] = useState(false);
   const resolved = resolveModelGender(modelChoice, selectedItems);
 
   useEffect(() => {
     void fetch("/api/preview")
       .then((response) => response.json())
-      .then((data: { configured?: boolean }) => setApiReady(Boolean(data.configured)))
-      .catch(() => setApiReady(false));
+      .then((data: { configured?: boolean; tryon?: boolean }) => {
+        setApiReady(Boolean(data.configured));
+        setTryonReady(Boolean(data.tryon));
+      })
+      .catch(() => {
+        setApiReady(false);
+        setTryonReady(false);
+      });
   }, [previewSource, generating]);
+
+  useEffect(() => {
+    if (generateMode !== "img2img") return;
+    const image = new Image();
+    image.src = MODEL_ASSETS[resolved].src;
+    image.onload = () => {
+      void import("../lib/generate/pose").then((mod) => mod.analyzeBody(image));
+    };
+  }, [generateMode, resolved]);
+
+  const statusText = !apiReady
+    ? "未配置 Key，使用本地合成"
+    : generateMode === "tryon"
+      ? generateProgress || (tryonReady ? "虚拟试衣 · AI试衣 Plus" : "试衣未配置，将用 Qwen 兜底")
+      : generateMode === "img2img"
+        ? generateProgress || "图生图 · Qwen 分层换装"
+        : "文生图 · Kolors 免费";
+
+  const emptyHint =
+    generateMode === "tryon"
+      ? "虚拟试衣：把上衣/下装穿到当前模特身上"
+      : generateMode === "img2img"
+        ? "图生图：按身体轮廓换装，并对齐原模特姿态"
+        : "文生图：按单品描述生成全身穿搭（免费）";
+
+  const sourceLabel = previewSource === "api" ? "AI 接口" : "本地合成";
 
   return (
     <section className="panel result" data-testid="result-panel">
       <div className="panel-head">
         <div>
           <h2>套装</h2>
-          <p data-testid="api-status">
-            {apiReady
-              ? generateMode === "img2img"
-                ? "图生图 · 需账户余额"
-                : "文生图 · Kolors 免费"
-              : "未配置 Key，使用本地合成"}
-          </p>
+          <p data-testid="api-status">{statusText}</p>
         </div>
         <button
           type="button"
@@ -59,7 +88,7 @@ export function ResultPanel() {
           disabled={generating}
           onClick={() => void generate()}
         >
-          {generating ? "生成中…" : "生成穿搭预览"}
+          {generating ? generateProgress || "生成中…" : "生成穿搭预览"}
         </button>
       </div>
 
@@ -95,28 +124,18 @@ export function ResultPanel() {
         <span className="model-hint">当前 {MODEL_ASSETS[resolved].label}</span>
       </div>
 
-      {generateMode === "img2img" ? (
-        <div className="model-preview">
-          <img src={MODEL_ASSETS[resolved].src} alt={MODEL_ASSETS[resolved].label} />
-        </div>
-      ) : null}
-
       <div className="preview-stage">
         {generating ? <div className="spinner" data-testid="generating" /> : null}
         {previewUrl ? (
           <img src={previewUrl} alt="穿搭预览" data-testid="preview-image" />
         ) : (
-          <p className="empty-hint">
-            {generateMode === "img2img"
-              ? "图生图：以模特底图 + 单品参考板出图"
-              : "文生图：按单品描述生成全身穿搭（免费）"}
-          </p>
+          <p className="empty-hint">{emptyHint}</p>
         )}
       </div>
 
       {previewPrompt ? (
         <p className="prompt-box" data-testid="preview-prompt">
-          <strong>{previewSource === "api" ? "AI 接口" : "本地合成"}</strong>
+          <strong>{sourceLabel}</strong>
           {previewPrompt}
         </p>
       ) : null}

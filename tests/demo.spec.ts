@@ -11,6 +11,7 @@ test("operation demo txt2img and img2img", async ({ page }) => {
   await expect(page.getByTestId("wardrobe-count")).toHaveText("6件单品", { timeout: 20_000 });
 
   await page.getByTestId("model-female").click();
+  await expect(page.getByTestId("mode-tryon")).toBeVisible();
   await page.getByTestId("mode-txt2img").click();
 
   await page.getByTestId("wardrobe-search").fill("红");
@@ -36,7 +37,7 @@ test("operation demo txt2img and img2img", async ({ page }) => {
   await page.waitForTimeout(800);
   await page.getByTestId("generate-preview").click();
   await expect(page.getByTestId("generating")).toBeVisible();
-  await expect(page.getByTestId("generating")).toBeHidden({ timeout: 90_000 });
+  await expect(page.getByTestId("generating")).toBeHidden({ timeout: 240_000 });
   await expect(page.getByTestId("preview-image")).toBeVisible();
   await page.waitForTimeout(2500);
 

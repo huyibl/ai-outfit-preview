@@ -56,18 +56,22 @@ export function guessFromFilename(filename: string): {
 
 export function garmentEn(item: ClothingItem) {
   const color = colorEn(item.color);
-  if (item.category === "dress") return `${color} one-piece dress`;
+  const note = item.notes?.trim() ? `, ${item.notes.trim()}` : "";
+  if (item.category === "dress") return `${color} one-piece dress${note}`;
   if (item.category === "bottom" && isSkirtLike(item)) {
-    return `${color} A-line midi skirt (skirt only, not pants)`;
+    return `${color} A-line midi skirt (skirt only, not pants)${note}`;
   }
-  if (item.category === "bottom") return `${color} trousers`;
+  if (item.category === "bottom") return `${color} trousers${note}`;
   if (item.category === "outerwear") {
-    if (/大衣|coat/i.test(item.name)) return `long ${color} double-breasted winter wool coat`;
-    if (/夹克|jacket|hoodie|卫衣/i.test(item.name)) return `${color} casual jacket or hoodie`;
-    return `${color} outerwear jacket`;
+    if (/大衣|coat/i.test(item.name)) return `long ${color} double-breasted winter wool coat${note}`;
+    if (/夹克|jacket|hoodie|卫衣/i.test(item.name)) return `${color} casual jacket or hoodie${note}`;
+    return `${color} outerwear jacket${note}`;
   }
-  if (item.category === "shoes") return `${color} sneakers`;
-  if (item.category === "bag") return `${color} tote bag held in one hand`;
-  if (item.category === "accessory") return `${color} accessory`;
-  return `${color} top`;
+  if (item.category === "shoes") {
+    if (/靴|boot/i.test(`${item.name} ${item.notes ?? ""}`)) return `${color} boots${note}`;
+    return `${color} sneakers${note}`;
+  }
+  if (item.category === "bag") return `${color} tote bag held in one hand${note}`;
+  if (item.category === "accessory") return `${color} accessory${note}`;
+  return `${color} top${note}`;
 }

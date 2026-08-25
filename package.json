@@ -7,9 +7,11 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "demo:video": "playwright test tests/demo.spec.ts && node scripts/copy-demo-video.mjs"
+    "demo:video": "playwright test tests/demo.spec.ts && node scripts/copy-demo-video.mjs",
+    "generate:models": "node scripts/generate-models.mjs"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "^1.0.1",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },

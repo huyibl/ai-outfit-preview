@@ -1,4 +1,4 @@
-import type { ClothingItem } from "../../types";
+import type { Category, ClothingItem } from "../../types";
 import { garmentEn, isSkirtLike } from "../guessItem";
 import type { ModelGender } from "../models";
 
@@ -18,29 +18,52 @@ export function buildTxtPrompt(items: ClothingItem[], gender: ModelGender) {
     "Standing straight on a seamless studio floor, small empty space above the head and below the shoes.",
     `${pronoun} is wearing exactly this coordinated outfit: ${worn}.`,
     skirtRule,
-    "Match the garment types and colors as specified. Studio lighting, plain background, realistic fabric.",
+    "Match the garment types, colors and fabric as specified. Studio lighting, plain background, photorealistic fabric and natural skin.",
     "Single person only. No close-up, no portrait crop, no mannequin, no collage, no extra people.",
   ]
     .filter(Boolean)
     .join(" ");
 }
 
-export function buildEditPrompt(items: ClothingItem[], gender: ModelGender) {
+export function buildLayerEditPrompt(item: ClothingItem, gender: ModelGender) {
   const person = gender === "female" ? "the same young woman" : "the same young man";
-  const worn = items.map((item) => `${garmentEn(item)} (${item.name})`).join(", ");
-  const skirtRule = items.some(isSkirtLike)
-    ? "The person MUST wear a skirt, never pants or trousers."
-    : "";
+  const garment = garmentEn(item);
+  const region = regionHint(item.category, item);
   return [
-    `Fashion photo edit: keep ${person} in the center, same face and body.`,
-    "Output a WIDE full-body shot: head, legs and shoes all visible, camera pulled back, not a portrait.",
-    `Replace their current clothes with these exact items from the thumbnails: ${worn}.`,
-    skirtRule,
-    "Output one clean photorealistic full-body lookbook photo of only the dressed person.",
-    "Do not keep product thumbnails, collage, labels, or extra people in the result.",
-  ]
-    .filter(Boolean)
-    .join(" ");
+    `Image 1 is a full-body photo of ${person}. Image 2 is a product photo of ${garment}.`,
+    "Image 3 is a close crop of the same face — keep this exact face and hairstyle.",
+    `Virtual try-on: ${region}`,
+    "Do not change identity, pose, camera distance, hands or studio background.",
+    "Only edit the clothing region. Make the garment drape with realistic folds, fabric texture and contact shadows.",
+    "Output one clean photorealistic full-body photo of only the dressed person.",
+    "Do not show the product card, split screen, collage, labels or extra people.",
+  ].join(" ");
+}
+
+function regionHint(category: Category, item: ClothingItem) {
+  if (category === "dress" || isSkirtLike(item)) {
+    return `replace only the lower-body clothing with this exact ${garmentEn(item)} from Image 2.`;
+  }
+  switch (category) {
+    case "bottom":
+      return `replace only the pants/skirt with this exact ${garmentEn(item)} from Image 2.`;
+    case "top":
+      return `replace only the shirt/top with this exact ${garmentEn(item)} from Image 2.`;
+    case "outerwear":
+      return `put this exact ${garmentEn(item)} from Image 2 on the person, fitting the shoulders and sleeves.`;
+    case "shoes":
+      return `replace only the shoes with this exact ${garmentEn(item)} from Image 2.`;
+    case "bag":
+      return `add this exact ${garmentEn(item)} from Image 2 in one hand or on the shoulder.`;
+    case "accessory":
+      return `add this exact accessory from Image 2, keep the rest of the outfit.`;
+    default:
+      return `dress the person in this exact garment from Image 2.`;
+  }
+}
+
+export function buildEditPrompt(items: ClothingItem[], gender: ModelGender) {
+  return items.map((item) => buildLayerEditPrompt(item, gender)).join(" ");
 }
 
 export function buildNegativePrompt(items: ClothingItem[], gender: ModelGender) {
@@ -50,18 +73,20 @@ export function buildNegativePrompt(items: ClothingItem[], gender: ModelGender) 
     "headshot",
     "selfie",
     "upper body crop",
-    "cropped at chest",
-    "cropped at waist",
-    "face zoom",
-    "tight framing",
+    "cartoon",
+    "illustration",
+    "plastic skin",
+    "warped clothes",
+    "floating garment",
     "collage",
     "thumbnail",
     "inset product photo",
+    "split screen",
     "mannequin",
     "multiple people",
     "extra limbs",
+    "deformed hands",
     "text overlay",
-    "split screen",
   ];
   if (gender === "female") parts.push("man", "male", "boy", "beard", "masculine face");
   if (gender === "male") parts.push("woman", "female", "girl", "feminine face");

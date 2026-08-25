@@ -1,27 +1,5 @@
 import type { ClothingItem } from "../../types";
-
-function loadImage(src: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error(`failed to load ${src}`));
-    image.src = src;
-  });
-}
-
-function drawContained(
-  ctx: CanvasRenderingContext2D,
-  image: HTMLImageElement,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-) {
-  const scale = Math.min(w / image.width, h / image.height);
-  const dw = image.width * scale;
-  const dh = image.height * scale;
-  ctx.drawImage(image, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
-}
+import { drawContained, loadImage } from "./image";
 
 function drawMannequin(ctx: CanvasRenderingContext2D, width: number, height: number) {
   const gradient = ctx.createLinearGradient(0, 0, 0, height);
@@ -60,6 +38,7 @@ const LAYOUT: Record<string, { x: number; y: number; w: number; h: number }> = {
 export async function mockCollage(
   items: ClothingItem[],
   imageUrls: Record<string, string>,
+  modelSrc?: string,
 ): Promise<string> {
   const canvas = document.createElement("canvas");
   canvas.width = 540;
@@ -68,7 +47,19 @@ export async function mockCollage(
   if (!ctx) {
     throw new Error("canvas unsupported");
   }
-  drawMannequin(ctx, canvas.width, canvas.height);
+
+  if (modelSrc) {
+    try {
+      const model = await loadImage(modelSrc);
+      ctx.fillStyle = "#f3f2ee";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      drawContained(ctx, model, 0, 0, canvas.width, canvas.height);
+    } catch {
+      drawMannequin(ctx, canvas.width, canvas.height);
+    }
+  } else {
+    drawMannequin(ctx, canvas.width, canvas.height);
+  }
 
   const order = ["bottom", "top", "dress", "outerwear", "shoes", "bag", "accessory"] as const;
   const sorted = [...items].sort(
@@ -82,6 +73,7 @@ export async function mockCollage(
     try {
       const image = await loadImage(src);
       ctx.save();
+      ctx.globalAlpha = 0.92;
       ctx.shadowColor = "rgba(0,0,0,0.18)";
       ctx.shadowBlur = 18;
       drawContained(ctx, image, box.x, box.y, box.w, box.h);
@@ -91,9 +83,5 @@ export async function mockCollage(
     }
   }
 
-  ctx.fillStyle = "rgba(47, 111, 98, 0.9)";
-  ctx.font = "600 16px system-ui, sans-serif";
-  ctx.fillText("AI 穿搭预演 · 本地合成", 18, 28);
-
-  return canvas.toDataURL("image/png");
+  return canvas.toDataURL("image/jpeg", 0.9);
 }
