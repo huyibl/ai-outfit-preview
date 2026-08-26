@@ -112,6 +112,32 @@ export async function analyzeBody(image: HTMLImageElement | HTMLCanvasElement): 
   }
 }
 
+export function assertFullBody(analysis: BodyAnalysis | null) {
+  if (!analysis) {
+    return "没有检测到完整人体，请上传站直的全身照（头和脚都要在画面里）";
+  }
+  const { points } = analysis;
+  const vis = (index: number) => points[index]?.v ?? 0;
+  if (vis(I.lShoulder) < 0.35 || vis(I.rShoulder) < 0.35) {
+    return "看不到肩膀，请正对镜头、露出上半身";
+  }
+  if (vis(I.lHip) < 0.28 || vis(I.rHip) < 0.28) {
+    return "看不到腰髋，请拉远拍摄全身";
+  }
+  if (vis(I.lAnkle) < 0.22 || vis(I.rAnkle) < 0.22) {
+    return "请拍到脚，不要用半身或大头照";
+  }
+  const noseY = points[I.nose]?.y ?? 0;
+  const ankleY = Math.max(points[I.lAnkle]?.y ?? 0, points[I.rAnkle]?.y ?? 0);
+  if (ankleY - noseY < 0.42) {
+    return "更像半身照，请拉远让头和脚都进入画面";
+  }
+  if (ankleY < 0.55) {
+    return "脚没有出现在画面下部，请改用全身照";
+  }
+  return null;
+}
+
 function px(points: BodyPoint[], index: number, w: number, h: number) {
   return { x: points[index].x * w, y: points[index].y * h };
 }

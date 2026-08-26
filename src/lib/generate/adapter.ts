@@ -1,6 +1,6 @@
 import type { ClothingItem } from "../../types";
 import { blendTryOn, cropIdentityRef } from "./blend";
-import { composePersonGarment, isolateGarment, toCompactJpeg, toPngDataUrl } from "./image";
+import { composePersonGarment, isolateGarment, prepareGarmentForTryOn, toCompactJpeg, toPngDataUrl } from "./image";
 import { sortForTryOn } from "./layers";
 import { mockCollage } from "./mock";
 import { buildLayerEditPrompt, buildNegativePrompt, buildTxtPrompt } from "./prompt";
@@ -61,11 +61,23 @@ export async function generatePreview(
   return generateVirtualTryOn(items, imageUrls, options);
 }
 
-function tryOnCaption(topItem?: ClothingItem, bottomItem?: ClothingItem) {
-  if (topItem?.category === "dress") return `连衣裙：${topItem.name}`;
+function tryOnCaption(
+  topItem?: ClothingItem,
+  bottomItem?: ClothingItem,
+  outerItem?: ClothingItem,
+  extras: ClothingItem[] = [],
+) {
+  if (topItem?.category === "dress") {
+    const parts = [`连衣裙：${topItem.name}`];
+    if (outerItem) parts.push(`外套：${outerItem.name}`);
+    parts.push(...extras.map((item) => `${item.category === "shoes" ? "鞋" : "包"}：${item.name}`));
+    return parts.join(" · ");
+  }
   const parts: string[] = [];
   if (topItem) parts.push(`上衣：${topItem.name}`);
   if (bottomItem) parts.push(`下装：${bottomItem.name}`);
+  if (outerItem) parts.push(`外套：${outerItem.name}`);
+  parts.push(...extras.map((item) => `${item.category === "shoes" ? "鞋" : "包"}：${item.name}`));
   return parts.join(" · ") || "虚拟试衣";
 }
 
@@ -78,14 +90,9 @@ async function generateVirtualTryOn(
     onProgress?: (text: string) => void;
   },
 ): Promise<GenerateResult> {
-  const { topItem, bottomItem, usable } = pickTryOnGarments(items, imageUrls);
+  const { topItem, bottomItem, outerItem, extras, usable } = pickTryOnGarments(items, imageUrls);
   if (!usable) {
-    options.onProgress?.("没有可试衣的上衣/下装，改用图生图");
-    const fallback = await generateLayeredTryOn(items, imageUrls, options);
-    return {
-      ...fallback,
-      warning: fallback.warning || "鞋包等单品暂不支持试衣，已改用图生图",
-    };
+    throw new Error("请先添加上衣或下装再试衣（鞋包会在试衣后再补）");
   }
 
   const status = await fetch("/api/preview")
@@ -97,30 +104,52 @@ async function generateVirtualTryOn(
     return { ...fallback, warning: "未配置阿里云试衣 Key，已改用图生图" };
   }
 
-  const caption = tryOnCaption(topItem, bottomItem);
+  const caption = tryOnCaption(topItem, bottomItem, outerItem, extras);
   options.onProgress?.("上传模特与衣图…");
   let tryonError = "";
+  let warning = "";
   try {
     const person = await toCompactJpeg(options.modelSrc);
-    const top = topItem ? await toCompactJpeg(await isolateGarment(imageUrls[topItem.imageId])) : undefined;
-    const bottom = bottomItem
-      ? await toCompactJpeg(await isolateGarment(imageUrls[bottomItem.imageId]))
-      : undefined;
-    options.onProgress?.("虚拟试衣生成中…");
-    const { response, data } = await postPreview({
+    const top = topItem ? await prepareGarmentForTryOn(imageUrls[topItem.imageId]) : undefined;
+    const bottom = bottomItem ? await prepareGarmentForTryOn(imageUrls[bottomItem.imageId]) : undefined;
+    options.onProgress?.(outerItem ? "虚拟试衣 · 内搭" : "虚拟试衣生成中…");
+    const first = await postPreview({
       mode: "tryon",
       person,
       top,
       bottom,
       prompt: caption,
     });
-    if (response.ok && data.image) {
-      return { url: data.image, prompt: caption, source: "api" };
+    if (!first.response.ok || !first.data.image) {
+      tryonError =
+        first.response.status === 501
+          ? "未配置阿里云试衣 Key"
+          : first.data.error || `试衣失败（HTTP ${first.response.status}）`;
+    } else {
+      let result = first.data.image;
+      if (outerItem) {
+        options.onProgress?.(`虚拟试衣 · 外套 ${outerItem.name}`);
+        const outer = await prepareGarmentForTryOn(imageUrls[outerItem.imageId]);
+        const second = await postPreview({
+          mode: "tryon",
+          person: await toCompactJpeg(result),
+          top: outer,
+          prompt: caption,
+        });
+        if (second.response.ok && second.data.image) {
+          result = second.data.image;
+        } else {
+          warning = `外套试衣未成功（${second.data.error || `HTTP ${second.response.status}`}），已保留内搭`;
+        }
+      }
+      if (extras.length > 0) {
+        options.onProgress?.("补鞋/包…");
+        const withExtras = await overlayAccessories(result, extras, imageUrls, options);
+        result = withExtras.url;
+        if (withExtras.warning) warning = [warning, withExtras.warning].filter(Boolean).join("；");
+      }
+      return { url: result, prompt: caption, source: "api", warning: warning || undefined };
     }
-    tryonError =
-      response.status === 501
-        ? "未配置阿里云试衣 Key"
-        : data.error || `试衣失败（HTTP ${response.status}）`;
   } catch (error) {
     tryonError = error instanceof Error ? error.message : "试衣失败";
   }
@@ -130,6 +159,38 @@ async function generateVirtualTryOn(
   );
   const fallback = await generateLayeredTryOn(items, imageUrls, options);
   return { ...fallback, warning: `${tryonError}，已改用图生图` };
+}
+
+async function overlayAccessories(
+  personSrc: string,
+  extras: ClothingItem[],
+  imageUrls: Record<string, string>,
+  options: { gender: ModelGender; onProgress?: (text: string) => void },
+) {
+  let person = await toPngDataUrl(personSrc);
+  const missed: string[] = [];
+  for (const item of extras) {
+    const src = imageUrls[item.imageId];
+    if (!src) continue;
+    options.onProgress?.(`补 ${item.name}`);
+    const garment = await isolateGarment(src);
+    const { response, data } = await postPreview({
+      prompt: buildLayerEditPrompt(item, options.gender),
+      negativePrompt: buildNegativePrompt([item], options.gender),
+      image: person,
+      image2: garment,
+      mode: "img2img",
+    });
+    if (response.ok && data.image) {
+      person = data.image;
+    } else {
+      missed.push(item.name);
+    }
+  }
+  return {
+    url: person,
+    warning: missed.length ? `${missed.join("、")} 未换上` : undefined,
+  };
 }
 
 async function generateTxt(

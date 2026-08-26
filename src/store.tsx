@@ -14,7 +14,7 @@ import { deleteImage, getImage, putImage } from "./lib/db";
 import { generatePreview, type GenerateMode } from "./lib/generate/adapter";
 import { createId } from "./lib/ids";
 import { guessFromFilename } from "./lib/guessItem";
-import { resolveModelGender, resolveModelSrc, type ModelChoice } from "./lib/models";
+import { CUSTOM_MODEL_ID, resolveModelGender, resolveModelSrc, type ModelChoice } from "./lib/models";
 import { seedIfNeeded } from "./lib/seed";
 import { loadItems, loadOutfits, saveItems, saveOutfits } from "./lib/storage";
 
@@ -35,6 +35,7 @@ interface AppState {
   filters: WardrobeFilters;
   modelChoice: ModelChoice;
   generateMode: GenerateMode;
+  customModelUrl: string | null;
 }
 
 type Action =
@@ -43,6 +44,7 @@ type Action =
       items: ClothingItem[];
       outfits: Outfit[];
       imageUrls: Record<string, string>;
+      customModelUrl?: string | null;
     }
   | { type: "UPSERT_ITEM"; item: ClothingItem; url: string }
   | { type: "DELETE_ITEM"; id: string }
@@ -65,7 +67,8 @@ type Action =
   | { type: "SET_NOTICE"; notice: string | null }
   | { type: "SET_FILTERS"; filters: Partial<WardrobeFilters> }
   | { type: "SET_MODEL_CHOICE"; choice: ModelChoice }
-  | { type: "SET_GENERATE_MODE"; mode: GenerateMode };
+  | { type: "SET_GENERATE_MODE"; mode: GenerateMode }
+  | { type: "SET_CUSTOM_MODEL"; url: string | null };
 
 const initialFilters: WardrobeFilters = {
   query: "",
@@ -91,6 +94,7 @@ const initialState: AppState = {
   filters: initialFilters,
   modelChoice: "auto",
   generateMode: "tryon",
+  customModelUrl: null,
 };
 
 function revokeAll(urls: Record<string, string>) {
@@ -105,6 +109,7 @@ function reducer(state: AppState, action: Action): AppState {
         items: action.items,
         outfits: action.outfits,
         imageUrls: action.imageUrls,
+        customModelUrl: action.customModelUrl ?? state.customModelUrl,
         hydrated: true,
       };
     case "UPSERT_ITEM": {
@@ -209,6 +214,12 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, modelChoice: action.choice };
     case "SET_GENERATE_MODE":
       return { ...state, generateMode: action.mode };
+    case "SET_CUSTOM_MODEL": {
+      if (state.customModelUrl && state.customModelUrl !== action.url) {
+        URL.revokeObjectURL(state.customModelUrl);
+      }
+      return { ...state, customModelUrl: action.url };
+    }
     default:
       return state;
   }
@@ -233,6 +244,8 @@ interface AppContextValue extends AppState {
   setFilters: (filters: Partial<WardrobeFilters>) => void;
   setModelChoice: (choice: ModelChoice) => void;
   setGenerateMode: (mode: GenerateMode) => void;
+  setCustomModelPhoto: (file: File) => Promise<void>;
+  clearCustomModelPhoto: () => Promise<void>;
   addImageFiles: (files: File[]) => Promise<void>;
   setZoom: (id: string | null) => void;
   clearNotice: () => void;
@@ -258,8 +271,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
             imageUrls[item.imageId] = URL.createObjectURL(blob);
           }
         }
+        const customBlob = await getImage(CUSTOM_MODEL_ID);
+        const customModelUrl = customBlob ? URL.createObjectURL(customBlob) : null;
         if (!cancelled) {
-          dispatch({ type: "HYDRATE", items, outfits, imageUrls });
+          dispatch({ type: "HYDRATE", items, outfits, imageUrls, customModelUrl });
         }
       } catch (error) {
         if (!cancelled) {
@@ -410,6 +425,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "DELETE_ITEM", id });
   }, [state.items]);
 
+  const setCustomModelPhoto = useCallback(async (file: File) => {
+    if (!file.type.startsWith("image/")) {
+      dispatch({ type: "SET_NOTICE", notice: "请选择图片文件" });
+      return;
+    }
+    const preview = URL.createObjectURL(file);
+    try {
+      const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = () => reject(new Error("图片无法读取"));
+        el.src = preview;
+      });
+      const { analyzeBody, assertFullBody } = await import("./lib/generate/pose");
+      const error = assertFullBody(await analyzeBody(image));
+      if (error) {
+        URL.revokeObjectURL(preview);
+        dispatch({ type: "SET_NOTICE", notice: error });
+        return;
+      }
+      await putImage(CUSTOM_MODEL_ID, file);
+      dispatch({ type: "SET_CUSTOM_MODEL", url: preview });
+      dispatch({ type: "SET_NOTICE", notice: "已使用你的全身照作为模特" });
+    } catch (error) {
+      URL.revokeObjectURL(preview);
+      dispatch({
+        type: "SET_NOTICE",
+        notice: error instanceof Error ? error.message : "上传模特失败",
+      });
+    }
+  }, []);
+
+  const clearCustomModelPhoto = useCallback(async () => {
+    await deleteImage(CUSTOM_MODEL_ID);
+    dispatch({ type: "SET_CUSTOM_MODEL", url: null });
+    dispatch({ type: "SET_NOTICE", notice: "已改回默认模特" });
+  }, []);
+
   const generate = useCallback(async () => {
     if (selectedItems.length === 0) {
       dispatch({ type: "SET_NOTICE", notice: "请先在搭配区加入单品" });
@@ -420,7 +473,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const gender = resolveModelGender(state.modelChoice, selectedItems);
       const result = await generatePreview(selectedItems, state.imageUrls, {
         gender,
-        modelSrc: await resolveModelSrc(gender),
+        modelSrc: state.customModelUrl ?? (await resolveModelSrc(gender)),
         mode: state.generateMode,
         onProgress: (text) => dispatch({ type: "SET_GENERATE_PROGRESS", text }),
       });
@@ -450,7 +503,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         notice: error instanceof Error ? error.message : "生成失败",
       });
     }
-  }, [selectedItems, state.imageUrls, state.modelChoice, state.generateMode]);
+  }, [selectedItems, state.imageUrls, state.modelChoice, state.generateMode, state.customModelUrl]);
 
   const exportData = useCallback(async () => {
     const backup = await exportBackup(state.items, state.outfits);
@@ -490,6 +543,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setFilters,
     setModelChoice,
     setGenerateMode,
+    setCustomModelPhoto,
+    clearCustomModelPhoto,
     addImageFiles,
     setZoom,
     clearNotice,

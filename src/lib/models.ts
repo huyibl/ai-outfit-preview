@@ -3,6 +3,8 @@ import type { ClothingItem } from "../types";
 export type ModelChoice = "auto" | "female" | "male";
 export type ModelGender = "female" | "male";
 
+export const CUSTOM_MODEL_ID = "model-custom";
+
 export const MODEL_ASSETS: Record<ModelGender, { src: string; label: string; candidates: string[] }> = {
   female: {
     src: "/models/female.png",

@@ -1,24 +1,32 @@
 # 🧥 AI 穿搭预演工具
 
-**Version 1.0**
+**Version 2.0**
 
-把衣柜里的单品拖到搭配区，一键生成全身穿搭预览。v1.0 默认走 **虚拟试衣（阿里云百炼 AI试衣 Plus）**，失败或未配置时自动改用 **Qwen 图生图**；也可手选免费 **文生图（Kolors）**。没有 Key 时本地拼贴，打开就能演示。
+把衣柜里的单品拖到搭配区，一键生成全身穿搭预览。v2.0 默认走 **虚拟试衣（阿里云百炼 AI试衣 Plus）**：先穿上衣/下装，有外套再穿一轮，鞋包在试衣成功后补上。失败或未配置时自动改用 **Qwen 图生图**；也可手选免费 **文生图（Kolors）**。没有 Key 时本地拼贴。
 
-**AI Outfit Preview v1.0** — Drag wardrobe items onto a canvas and generate a full-body look. Default path is Alibaba Cloud virtual try-on (`aitryon-plus`); Qwen image-edit is the fallback; Kolors text-to-image is optional. Local collage if no keys.
+**AI Outfit Preview v2.0** — Virtual try-on first (inner layer, then coat), then shoes/bag. Qwen image-edit is the fallback; Kolors text-to-image is optional.
 
 仓库：[github.com/huyibl/ai-outfit-preview](https://github.com/huyibl/ai-outfit-preview)
 
 ---
 
-## 📷 样例图
+## 🎬 虚拟试衣演示
 
-本工具面向服装行业的 AI 工作流：把试衣、出图接到商品企划与设计环节，后续可对接 ERP，覆盖核工价、计件工资等环节。
+v2.0 录制片段：女模 → **虚拟试衣** → 橙色夹克 / 红色外套 / 灰色半裙 → 生成结果。
 
-![样例图：打通 AI 工具与服装 ERP 系统接口，搭建定制化 AI 工作流平台](docs/sample.png)
+1. 选择虚拟试衣，可上传全身照  
 
-> 打通 AI 工具与服装 ERP 系统接口，搭建定制化 AI 工作流平台，实现商品企划、设计、核工价、计件工资全流程自动化。
+![选择虚拟试衣](docs/demo-01-tryon-mode.png)
 
-当前 v1.0 先落地 **衣橱管理 + 搭配画布 + 虚拟试衣出图**，作为这条工作流里「设计/试衣」这一环。
+2. 把上衣、外套、下装加入搭配  
+
+![加入搭配](docs/demo-02-outfit.png)
+
+3. 生成完成，右侧只显示试衣结果  
+
+![试衣完成](docs/tryon-preview.png)
+
+本地再录：`npm run demo:video`（会覆盖 `docs/` 里这组截图）。更早的文生图 + 图生图演示：[Bilibili BV1Kv8K6BE3F](https://www.bilibili.com/video/BV1Kv8K6BE3F/)
 
 ---
 
@@ -42,8 +50,8 @@
 
 ### 套装预览
 
-- 模特：自动 / 女模 / 男模。全身照放在 `public/models/female.png` 或 `male.png`。
-- **虚拟试衣（默认）**：上衣、下装（连衣裙走上衣槽）穿到当前模特身上。鞋包不参与试衣。
+- 模特：自动 / 女模 / 男模，也可在右栏 **上传自己的全身照**（需头和脚都在画面里）。默认底图在 `public/models/female.png` 或 `male.png`。
+- **虚拟试衣（默认）**：先穿上衣/下装，有外套时再穿一轮；鞋包在试衣成功后补一层。
 - **文生图**：按单品文字描述生成全身写真（Kolors，免费额度）。
 - **图生图**：Qwen 分层换装 + 姿态对齐，作为试衣兜底或手动选择。
 - 右侧生成区 **只显示结果图**。
@@ -53,20 +61,10 @@
 
 | 模式 | 做什么 | 何时使用 |
 | --- | --- | --- |
-| 虚拟试衣 | 百炼 `aitryon-plus`，固定模特换上衣/下装 | 默认，最接近真实试衣 |
+| 虚拟试衣 | 百炼 `aitryon-plus`，内搭后再穿外套 | 默认，最接近真实试衣 |
 | 图生图 | Qwen-Image-Edit 分层换装 | 试衣失败 / 未配百炼 Key / 手选 |
 | 文生图 | Kolors 按文字生成 | 免费出一张完整穿搭照 |
 | 本地合成 | Canvas 把单品贴到人台上 | 没网、没 Key、录作业 |
-
----
-
-## 🎬 演示视频
-
-操作演示：[Bilibili BV1Kv8K6BE3F](https://www.bilibili.com/video/BV1Kv8K6BE3F/)
-
-本地再录：`npm run demo:video` → `demo/ai-outfit-demo.webm`（体积大，不纳入 Git）。
-
-演示流程：加载示例衣橱 → 女模 → 红大衣 / 灰裙 / 白鞋 / 黑包 → 文生图出图 → 切换图生图再出图 → 保存套装 → 导出备份。
 
 ---
 
@@ -101,9 +99,9 @@ Key 只给本机开发服务器读取，**不要提交 `.env`**。
 | 页面 | Vite 7、React 19、TypeScript 5.9 | 热更新快 |
 | 拖拽 | 原生 HTML5 DnD | 依赖少 |
 | 存储 | localStorage + IndexedDB | 图片不进 localStorage |
-| 试衣 | 百炼 `aitryon-plus` + 临时 OSS 上传 | 默认路径 |
+| 试衣 | 百炼 `aitryon-plus` + 临时 OSS 上传 | 默认路径：内搭 → 外套 |
 | 图生图 / 文生图 | SiliconFlow Kolors / Qwen-Image-Edit | 兜底与免费出图 |
-| 姿态 | MediaPipe Pose Landmarker Lite | 图生图对齐人体轮廓 |
+| 姿态 | MediaPipe Pose Landmarker Lite | 校验全身照、图生图对齐轮廓 |
 | 录屏 | Playwright 1.55 | `npm run demo:video` |
 
 不引入登录或数据库。没有 `/api/preview` 时自动只用本地合成。
@@ -113,7 +111,7 @@ Key 只给本机开发服务器读取，**不要提交 `.env`**。
 | 路径 | 典型时延 | 费用 |
 | --- | --- | --- |
 | 本地 Canvas 合成 | 约 0.5–2 秒 | 免费 |
-| 百炼 AI试衣 Plus | 约 15–40 秒 | 按百炼计费 |
+| 百炼 AI试衣 Plus | 约 15–40 秒/轮 | 按百炼计费 |
 | Kolors 文生图 | 约 3–8 秒 | 免费额度 |
 | Qwen 分层换装 | 约 8–20 秒/件 | 约 ¥0.30/件 |
 
@@ -138,11 +136,5 @@ Key 只给本机开发服务器读取，**不要提交 `.env`**。
 ## 🤝 贡献与许可证
 
 欢迎 Issue / PR。请保持「无 Key 也能跑通演示」：新功能不要把真实 API 做成硬依赖。提交前执行 `npm run build`。
-
-**v1.0 之后**
-
-1. 把 `public/models/*.png` 换成自己的全身照，试衣更稳。
-2. 将 `/api/preview` 做成独立小服务，便于静态托管。
-3. 对接服装 ERP（企划、核工价、计件工资）——与上方样例图同一方向。
 
 许可证：[MIT](LICENSE)。

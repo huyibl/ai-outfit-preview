@@ -6,11 +6,16 @@ export function pickTryOnGarments(items: ClothingItem[], imageUrls: Record<strin
   const outer = withImage.find((item) => item.category === "outerwear");
   const top = withImage.find((item) => item.category === "top");
   const bottom = withImage.find((item) => item.category === "bottom");
-  const topItem = onePiece ?? outer ?? top;
+  const innerTop = onePiece ?? top;
+  const firstTop = innerTop ?? outer;
   const bottomItem = onePiece ? undefined : bottom;
+  const outerItem = innerTop && outer ? outer : undefined;
+  const extras = withImage.filter((item) => item.category === "shoes" || item.category === "bag");
   return {
-    topItem,
+    topItem: firstTop,
     bottomItem,
-    usable: Boolean(topItem || bottomItem),
+    outerItem,
+    extras,
+    usable: Boolean(firstTop || bottomItem),
   };
 }

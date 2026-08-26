@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { GenerateMode } from "../lib/generate/adapter";
 import { MODEL_ASSETS, resolveModelGender, type ModelChoice } from "../lib/models";
 import { useApp } from "../store";
@@ -10,7 +10,7 @@ const MODEL_CHOICES: Array<{ id: ModelChoice; label: string }> = [
 ];
 
 const GEN_MODES: Array<{ id: GenerateMode; label: string; hint: string }> = [
-  { id: "tryon", label: "虚拟试衣", hint: "百炼 AI试衣 Plus · 失败改用 Qwen" },
+  { id: "tryon", label: "虚拟试衣", hint: "先内搭再外套 · 鞋包后补" },
   { id: "txt2img", label: "文生图", hint: "免费 · Kolors" },
   { id: "img2img", label: "图生图", hint: "约 ¥0.30/件 · Qwen 分层换装" },
 ];
@@ -30,7 +30,11 @@ export function ResultPanel() {
     setModelChoice,
     generateMode,
     setGenerateMode,
+    customModelUrl,
+    setCustomModelPhoto,
+    clearCustomModelPhoto,
   } = useApp();
+  const photoRef = useRef<HTMLInputElement>(null);
   const [apiReady, setApiReady] = useState(false);
   const [tryonReady, setTryonReady] = useState(false);
   const resolved = resolveModelGender(modelChoice, selectedItems);
@@ -60,14 +64,14 @@ export function ResultPanel() {
   const statusText = !apiReady
     ? "未配置 Key，使用本地合成"
     : generateMode === "tryon"
-      ? generateProgress || (tryonReady ? "虚拟试衣 · AI试衣 Plus" : "试衣未配置，将用 Qwen 兜底")
+      ? generateProgress || (tryonReady ? "虚拟试衣 · 内搭后再穿外套" : "试衣未配置，将用 Qwen 兜底")
       : generateMode === "img2img"
         ? generateProgress || "图生图 · Qwen 分层换装"
         : "文生图 · Kolors 免费";
 
   const emptyHint =
     generateMode === "tryon"
-      ? "虚拟试衣：把上衣/下装穿到当前模特身上"
+      ? "虚拟试衣：把上衣/下装穿到当前模特身上（可先上传全身照）"
       : generateMode === "img2img"
         ? "图生图：按身体轮廓换装，并对齐原模特姿态"
         : "文生图：按单品描述生成全身穿搭（免费）";
@@ -122,6 +126,42 @@ export function ResultPanel() {
           </button>
         ))}
         <span className="model-hint">当前 {MODEL_ASSETS[resolved].label}</span>
+      </div>
+
+      <div className="model-picker">
+        <input
+          ref={photoRef}
+          type="file"
+          accept="image/*"
+          hidden
+          data-testid="upload-model-input"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) void setCustomModelPhoto(file);
+          }}
+        />
+        <button
+          type="button"
+          className={customModelUrl ? "chip active" : "chip"}
+          data-testid="upload-model"
+          onClick={() => photoRef.current?.click()}
+        >
+          上传全身照
+        </button>
+        {customModelUrl ? (
+          <button
+            type="button"
+            className="chip"
+            data-testid="clear-model"
+            onClick={() => void clearCustomModelPhoto()}
+          >
+            改回默认
+          </button>
+        ) : null}
+        <span className="model-hint">
+          {customModelUrl ? "当前使用你的全身照（需头和脚都在画面里）" : "默认模特 · 可换成自己的全身照"}
+        </span>
       </div>
 
       <div className="preview-stage">

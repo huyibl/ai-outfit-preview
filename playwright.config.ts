@@ -2,17 +2,14 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests",
-  timeout: 120_000,
+  timeout: 420_000,
   fullyParallel: false,
   retries: 0,
   outputDir: "demo/results",
   use: {
     baseURL: "http://127.0.0.1:5173",
     viewport: { width: 1440, height: 900 },
-    video: {
-      mode: "on",
-      size: { width: 1440, height: 900 },
-    },
+    video: "off",
     launchOptions: {
       slowMo: 480,
     },
@@ -22,6 +19,7 @@ export default defineConfig({
       name: "chromium",
       use: {
         ...devices["Desktop Chrome"],
+        channel: "msedge",
         viewport: { width: 1440, height: 900 },
       },
     },

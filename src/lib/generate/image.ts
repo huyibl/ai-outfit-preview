@@ -41,7 +41,7 @@ export async function toPngDataUrl(src: string, maxW = 640, maxH = 1136): Promis
 
 export const toJpegDataUrl = toPngDataUrl;
 
-export async function toCompactJpeg(src: string, maxW = 1024, maxH = 1536, quality = 0.86) {
+export async function toCompactJpeg(src: string, maxW = 1600, maxH = 2400, quality = 0.9) {
   const image = await loadImage(src);
   const scale = Math.min(1, maxW / image.width, maxH / image.height);
   const canvas = document.createElement("canvas");
@@ -53,6 +53,63 @@ export async function toCompactJpeg(src: string, maxW = 1024, maxH = 1536, quali
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
   return canvas.toDataURL("image/jpeg", quality);
+}
+
+function cropToContent(source: HTMLCanvasElement, padRatio = 0.04) {
+  const ctx = source.getContext("2d");
+  if (!ctx) return source;
+  const { width: w, height: h } = source;
+  const data = ctx.getImageData(0, 0, w, h).data;
+  let minX = w;
+  let minY = h;
+  let maxX = 0;
+  let maxY = 0;
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const i = (y * w + x) * 4;
+      if (data[i] > 248 && data[i + 1] > 248 && data[i + 2] > 248) continue;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX <= minX || maxY <= minY) return source;
+  const padX = Math.round((maxX - minX) * padRatio);
+  const padY = Math.round((maxY - minY) * padRatio);
+  minX = Math.max(0, minX - padX);
+  minY = Math.max(0, minY - padY);
+  maxX = Math.min(w - 1, maxX + padX);
+  maxY = Math.min(h - 1, maxY + padY);
+  const cw = maxX - minX + 1;
+  const ch = maxY - minY + 1;
+  if (cw * ch > w * h * 0.92) return source;
+  const out = document.createElement("canvas");
+  out.width = cw;
+  out.height = ch;
+  const outCtx = out.getContext("2d");
+  if (!outCtx) return source;
+  outCtx.fillStyle = "#ffffff";
+  outCtx.fillRect(0, 0, cw, ch);
+  outCtx.drawImage(source, minX, minY, cw, ch, 0, 0, cw, ch);
+  return out;
+}
+
+/** Tight product crop for DashScope try-on: little whitespace, keep aspect. */
+export async function prepareGarmentForTryOn(src: string, maxSide = 2048) {
+  const image = await loadImage(src);
+  const scale = Math.min(1, maxSide / image.width, maxSide / image.height);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.width * scale));
+  canvas.height = Math.max(1, Math.round(image.height * scale));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("canvas unsupported");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  whitenProductBackground(ctx, canvas.width, canvas.height);
+  const cropped = cropToContent(canvas);
+  return cropped.toDataURL("image/jpeg", 0.92);
 }
 
 function whitenProductBackground(ctx: CanvasRenderingContext2D, w: number, h: number) {
