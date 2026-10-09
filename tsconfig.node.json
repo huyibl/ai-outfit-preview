@@ -9,5 +9,6 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["vite.config.ts", "playwright.config.ts", "scripts", "server"]
+  "include": ["vite.config.ts", "vitest.config.ts", "playwright.config.ts", "scripts", "server", "tests"],
+  "exclude": ["tests/demo.spec.ts", "tests/adapter.test.ts"]
 }

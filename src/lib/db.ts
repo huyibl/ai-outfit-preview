@@ -57,6 +57,18 @@ export async function clearImages() {
   }
 }
 
+export async function listImageKeys(): Promise<string[]> {
+  const db = await openDb();
+  try {
+    const keys = await requestToPromise<IDBValidKey[]>(
+      db.transaction(STORE).objectStore(STORE).getAllKeys(),
+    );
+    return keys.map(String);
+  } finally {
+    db.close();
+  }
+}
+
 export function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

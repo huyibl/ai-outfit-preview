@@ -106,6 +106,16 @@ Key 只给本机开发服务器读取，**不要提交 `.env`**。
 
 不引入登录或数据库。没有 `/api/preview` 时自动只用本地合成。
 
+---
+
+## 📦 部署与接入（v2.1）
+
+- **生产部署**：`npm run build && npm run start` 单进程托管页面 + API（默认 8787 端口）。设置 `ACCESS_TOKEN` 后接口需要 `Authorization: Bearer <token>`，页面会弹出令牌输入条；不设置则仅限本机调用。
+- **HTTP API**：`/api/v1/preview`（生成）+ `/api/v1/capabilities`（探测），统一错误码、内置限流（生成 10 次/分、试衣 4 次/分、请求体 ≤8MB）、CORS 白名单（`ALLOWED_ORIGINS`）。契约见 [docs/api.md](docs/api.md)。
+- **iframe 嵌入**：`/?embed=1` 加载精简界面，宿主页通过 postMessage 预置衣物、接收生成结果，协议见 docs/api.md。
+- **测试**：`npm test`（20 个用例：API 鉴权/限流/体积/CORS/错误码 + 选衣与模特逻辑）。
+- **CI**：GitHub Actions 在 push/PR 时跑 build + test。
+
 ### 性能与成本（本机实测口径）
 
 | 路径 | 典型时延 | 费用 |

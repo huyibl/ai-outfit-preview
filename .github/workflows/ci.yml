@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: 构建产物不得包含 key 痕迹
+        run: |
+          ! grep -rli "sk-\|DASHSCOPE_API_KEY\|IMAGE_API_KEY" dist/
+      - run: npm test

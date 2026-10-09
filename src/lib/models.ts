@@ -7,14 +7,14 @@ export const CUSTOM_MODEL_ID = "model-custom";
 
 export const MODEL_ASSETS: Record<ModelGender, { src: string; label: string; candidates: string[] }> = {
   female: {
-    src: "/models/female.png",
+    src: "/models/female.webp",
     label: "女模",
-    candidates: ["/models/female.png", "/models/female.jpg"],
+    candidates: ["/models/female.webp"],
   },
   male: {
-    src: "/models/male.png",
+    src: "/models/male.webp",
     label: "男模",
-    candidates: ["/models/male.png", "/models/male.jpg"],
+    candidates: ["/models/male.webp"],
   },
 };
 

@@ -5,21 +5,48 @@ import {
   useEffect,
   useMemo,
   useReducer,
+  useRef,
   type ReactNode,
 } from "react";
-import type { ClothingItem, EditorMode, Outfit, WardrobeFilters } from "./types";
+import type { Category, ClothingItem, EditorMode, Outfit, WardrobeFilters } from "./types";
 import { downloadJson, exportBackup, importBackup } from "./lib/backup";
 import { addToCanvas, canvasItems } from "./lib/canvasRules";
-import { deleteImage, getImage, putImage } from "./lib/db";
+import { blobToDataUrl, dataUrlToBlob, deleteImage, getImage, putImage } from "./lib/db";
+import { apiFetch, errorMessage } from "./lib/apiClient";
 import { generatePreview, type GenerateMode } from "./lib/generate/adapter";
 import { createId } from "./lib/ids";
 import { guessFromFilename } from "./lib/guessItem";
 import { CUSTOM_MODEL_ID, resolveModelGender, resolveModelSrc, type ModelChoice } from "./lib/models";
+import { BudgetExhaustedError } from "./lib/generate/adapter";
+import { reportEvent } from "./lib/beacon";
+import { countDeviceTryon, deviceQuotaLeft, DEVICE_TRYON_DAILY_LIMIT } from "./lib/deviceQuota";
+import { addFeedback, summarizePreference } from "./lib/feedback";
 import { seedIfNeeded } from "./lib/seed";
 import { loadItems, loadOutfits, saveItems, saveOutfits } from "./lib/storage";
 
-interface AppState {
-  items: ClothingItem[];
+export interface PlanCard {
+  id: string;
+  styleName: string;
+  occasion: string;
+  itemIds: string[];
+  reason: string;
+  styleTags: string[];
+  status: "imaging" | "done" | "failed" | "noimage";
+  progressText?: string;
+  url?: string;
+  error?: string;
+  inspired?: boolean;
+  source?: "llm" | "rule";
+  degradedLevel?: "qwen" | "collage";
+}
+
+export interface EmbeddedItemEntry {
+  dataUrl: string;
+  name?: string;
+  category?: Category;
+}
+
+interface AppState {  items: ClothingItem[];
   outfits: Outfit[];
   canvasIds: string[];
   previewUrl: string | null;
@@ -36,6 +63,8 @@ interface AppState {
   modelChoice: ModelChoice;
   generateMode: GenerateMode;
   customModelUrl: string | null;
+  plans: PlanCard[];
+  planGaps: string[];
 }
 
 type Action =
@@ -54,7 +83,7 @@ type Action =
   | { type: "SET_PREVIEW"; url: string; prompt: string; source: "api" | "mock" }
   | { type: "SET_GENERATING"; value: boolean }
   | { type: "SET_GENERATE_PROGRESS"; text: string | null }
-  | { type: "SAVE_OUTFIT" }
+  | { type: "SAVE_OUTFIT"; outfit: Outfit }
   | { type: "LOAD_OUTFIT"; id: string }
   | {
       type: "REPLACE_ALL";
@@ -68,7 +97,11 @@ type Action =
   | { type: "SET_FILTERS"; filters: Partial<WardrobeFilters> }
   | { type: "SET_MODEL_CHOICE"; choice: ModelChoice }
   | { type: "SET_GENERATE_MODE"; mode: GenerateMode }
-  | { type: "SET_CUSTOM_MODEL"; url: string | null };
+  | { type: "SET_CUSTOM_MODEL"; url: string | null }
+  | { type: "PATCH_ITEM_META"; id: string; patch: Partial<ClothingItem> }
+  | { type: "SET_PLANS"; plans: PlanCard[]; gaps: string[] }
+  | { type: "PATCH_PLAN"; id: string; patch: Partial<PlanCard> }
+  | { type: "CLEAR_PLANS" };
 
 const initialFilters: WardrobeFilters = {
   query: "",
@@ -95,6 +128,8 @@ const initialState: AppState = {
   modelChoice: "auto",
   generateMode: "tryon",
   customModelUrl: null,
+  plans: [],
+  planGaps: [],
 };
 
 function revokeAll(urls: Record<string, string>) {
@@ -167,17 +202,7 @@ function reducer(state: AppState, action: Action): AppState {
     case "SET_GENERATE_PROGRESS":
       return { ...state, generateProgress: action.text };
     case "SAVE_OUTFIT": {
-      const selected = canvasItems(state.canvasIds, state.items);
-      if (selected.length === 0) {
-        return { ...state, notice: "请先在搭配区加入单品" };
-      }
-      const outfit: Outfit = {
-        id: createId("outfit"),
-        itemIds: [...state.canvasIds],
-        previewDataUrl: state.previewUrl ?? undefined,
-        createdAt: new Date().toISOString(),
-      };
-      return { ...state, outfits: [outfit, ...state.outfits], notice: "套装已保存" };
+      return { ...state, outfits: [action.outfit, ...state.outfits], notice: "套装已保存" };
     }
     case "LOAD_OUTFIT": {
       const outfit = state.outfits.find((entry) => entry.id === action.id);
@@ -185,9 +210,9 @@ function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         canvasIds: outfit.itemIds.filter((id) => state.items.some((item) => item.id === id)),
-        previewUrl: outfit.previewDataUrl ?? null,
+        previewUrl: outfit.previewDataUrl ?? state.imageUrls[`outfit-img:${outfit.id}`] ?? null,
         previewPrompt: "",
-        previewSource: outfit.previewDataUrl ? state.previewSource : null,
+        previewSource: null,
       };
     }
     case "REPLACE_ALL":
@@ -220,6 +245,20 @@ function reducer(state: AppState, action: Action): AppState {
       }
       return { ...state, customModelUrl: action.url };
     }
+    case "PATCH_ITEM_META":
+      return {
+        ...state,
+        items: state.items.map((item) => (item.id === action.id ? { ...item, ...action.patch } : item)),
+      };
+    case "SET_PLANS":
+      return { ...state, plans: action.plans, planGaps: action.gaps };
+    case "PATCH_PLAN":
+      return {
+        ...state,
+        plans: state.plans.map((plan) => (plan.id === action.id ? { ...plan, ...action.patch } : plan)),
+      };
+    case "CLEAR_PLANS":
+      return { ...state, plans: [], planGaps: [] };
     default:
       return state;
   }
@@ -236,9 +275,13 @@ interface AppContextValue extends AppState {
   openCreate: () => void;
   openEdit: (id: string) => void;
   closeEditor: () => void;
-  saveItem: (input: Omit<ClothingItem, "id" | "imageId"> & { id?: string; imageId?: string; file?: File }) => Promise<void>;
+  saveItem: (input: Omit<ClothingItem, "id" | "imageId"> & { id?: string; imageId?: string; file?: File }) => Promise<{ id: string; imageId: string }>;
   removeItem: (id: string) => Promise<void>;
   generate: () => Promise<void>;
+  cancelGenerate: () => void;
+  generateStylistPlans: (intent: string) => Promise<void>;
+  retryPlan: (id: string) => Promise<void>;
+  votePlan: (id: string, vote: 1 | -1) => void;
   exportData: () => Promise<void>;
   importData: (file: File) => Promise<void>;
   setFilters: (filters: Partial<WardrobeFilters>) => void;
@@ -247,6 +290,7 @@ interface AppContextValue extends AppState {
   setCustomModelPhoto: (file: File) => Promise<void>;
   clearCustomModelPhoto: () => Promise<void>;
   addImageFiles: (files: File[]) => Promise<void>;
+  addEmbeddedItems: (entries: EmbeddedItemEntry[]) => Promise<void>;
   setZoom: (id: string | null) => void;
   clearNotice: () => void;
 }
@@ -255,6 +299,7 @@ const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const generateAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -273,6 +318,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
         const customBlob = await getImage(CUSTOM_MODEL_ID);
         const customModelUrl = customBlob ? URL.createObjectURL(customBlob) : null;
+        for (const outfit of outfits) {
+          const blob = await getImage(`outfit-img:${outfit.id}`);
+          if (blob) {
+            imageUrls[`outfit-img:${outfit.id}`] = URL.createObjectURL(blob);
+          }
+        }
         if (!cancelled) {
           dispatch({ type: "HYDRATE", items, outfits, imageUrls, customModelUrl });
         }
@@ -300,7 +351,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!state.hydrated) return;
     saveItems(state.items);
     saveOutfits(state.outfits);
+    // 备份提醒的"有改动"标记：内容指纹变化才标脏
+    try {
+      const fingerprint = JSON.stringify(state.items.map((item) => [item.id, item.name, item.category]));
+      if (localStorage.getItem("ai-outfit-preview:items-fingerprint") !== fingerprint) {
+        localStorage.setItem("ai-outfit-preview:items-fingerprint", fingerprint);
+        localStorage.setItem("ai-outfit-preview:backup-dirty", "1");
+      }
+    } catch {
+      // 忽略
+    }
   }, [state.hydrated, state.items, state.outfits]);
+
+  // 备份提醒：距上次备份>7天 且 有改动 且 距上次忽略>7天（每周最多一次）
+  useEffect(() => {
+    if (!state.hydrated) return;
+    try {
+      const now = Date.now();
+      const day = 86_400_000;
+      const dirty = localStorage.getItem("ai-outfit-preview:backup-dirty") === "1";
+      const lastBackup = Number(localStorage.getItem("ai-outfit-preview:last-backup") || 0);
+      const lastDismiss = Number(localStorage.getItem("ai-outfit-preview:backup-dismissed") || 0);
+      if (dirty && now - lastBackup > 7 * day && now - lastDismiss > 7 * day) {
+        localStorage.setItem("ai-outfit-preview:backup-dismissed", String(now));
+        dispatch({
+          type: "SET_NOTICE",
+          notice: `衣橱里有 ${state.items.length} 件单品且近期有改动，建议点右上角「导出备份」防止清缓存丢失`,
+        });
+      }
+    } catch {
+      // 忽略
+    }
+  }, [state.hydrated, state.items.length]);
 
   useEffect(() => {
     if (!state.notice) return;
@@ -338,7 +420,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [],
   );
   const clearCanvas = useCallback(() => dispatch({ type: "CLEAR_CANVAS" }), []);
-  const saveOutfit = useCallback(() => dispatch({ type: "SAVE_OUTFIT" }), []);
+  const saveOutfit = useCallback(() => {
+    const selected = canvasItems(state.canvasIds, state.items);
+    if (selected.length === 0) {
+      dispatch({ type: "SET_NOTICE", notice: "请先在搭配区加入单品" });
+      return;
+    }
+    const outfit: Outfit = {
+      id: createId("outfit"),
+      itemIds: [...state.canvasIds],
+      createdAt: new Date().toISOString(),
+    };
+    void (async () => {
+      // 预览图进 IndexedDB（key: outfit-img:<id>），localStorage 只存轻量套装记录
+      if (state.previewUrl) {
+        try {
+          const blob = await (await fetch(state.previewUrl)).blob();
+          await putImage(`outfit-img:${outfit.id}`, blob);
+        } catch {
+          // 图存不下就只存搭配本身
+        }
+      }
+      dispatch({ type: "SAVE_OUTFIT", outfit });
+    })();
+  }, [state.canvasIds, state.items, state.previewUrl]);
   const loadOutfit = useCallback((id: string) => dispatch({ type: "LOAD_OUTFIT", id }), []);
   const openCreate = useCallback(() => dispatch({ type: "SET_EDITOR", editor: { kind: "create" } }), []);
   const openEdit = useCallback(
@@ -362,7 +467,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const clearNotice = useCallback(() => dispatch({ type: "SET_NOTICE", notice: null }), []);
 
   const saveItem = useCallback(
-    async (input: Omit<ClothingItem, "id" | "imageId"> & { id?: string; imageId?: string; file?: File }) => {
+    async (input: Omit<ClothingItem, "id" | "imageId"> & { id?: string; imageId?: string; file?: File }): Promise<{ id: string; imageId: string }> => {
       const id = input.id ?? createId("item");
       const imageId = input.imageId ?? createId("img");
       let url = state.imageUrls[imageId];
@@ -384,9 +489,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
           season: input.season,
           occasion: input.occasion,
           notes: input.notes,
+          style: input.style,
+          material: input.material,
+          fit: input.fit,
+          pattern: input.pattern,
         },
         url,
       });
+      return { id, imageId };
     },
     [state.imageUrls],
   );
@@ -398,9 +508,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "SET_NOTICE", notice: "请选择图片文件" });
         return;
       }
+      const saved: Array<{ id: string; imageId: string; file: File }> = [];
       for (const file of images) {
         const guessed = guessFromFilename(file.name);
-        await saveItem({
+        const record = await saveItem({
           name: guessed.name,
           category: guessed.category,
           color: guessed.color,
@@ -408,11 +519,70 @@ export function AppProvider({ children }: { children: ReactNode }) {
           occasion: "daily",
           file,
         });
+        saved.push({ ...record, file });
       }
       dispatch({
         type: "SET_NOTICE",
         notice: `已导入 ${images.length} 件，可点「编辑」补全品类颜色`,
       });
+      // AI 自动打标（风格/材质/版型/图案），失败静默，用户可手动编辑
+      void (async () => {
+        for (const record of saved) {
+          try {
+            const imageDataUrl = await blobToDataUrl(record.file);
+            const tag = await apiFetch<{ style?: string; material?: string; fit?: string; pattern?: string }>(
+              "/api/v1/tag",
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ imageDataUrl }),
+              },
+            );
+            if (!tag.ok) continue;
+            const patch: Partial<ClothingItem> = {};
+            if (tag.data.style) patch.style = tag.data.style;
+            if (tag.data.material) patch.material = tag.data.material;
+            if (tag.data.fit) patch.fit = tag.data.fit;
+            if (tag.data.pattern) patch.pattern = tag.data.pattern;
+            if (Object.keys(patch).length > 0) {
+              dispatch({ type: "PATCH_ITEM_META", id: record.id, patch });
+            }
+          } catch {
+            // 打标失败不影响导入
+          }
+        }
+      })();
+    },
+    [saveItem],
+  );
+
+  const addEmbeddedItems = useCallback(
+    async (entries: EmbeddedItemEntry[]) => {
+      let added = 0;
+      for (const entry of entries) {
+        if (typeof entry?.dataUrl !== "string" || !entry.dataUrl.startsWith("data:image/")) continue;
+        try {
+          const blob = dataUrlToBlob(entry.dataUrl);
+          const file = new File([blob], entry.name || `embed-item-${added + 1}.png`, {
+            type: blob.type || "image/png",
+          });
+          const guessed = guessFromFilename(file.name);
+          await saveItem({
+            name: entry.name || guessed.name,
+            category: entry.category || guessed.category,
+            color: guessed.color,
+            season: "all",
+            occasion: "daily",
+            file,
+          });
+          added += 1;
+        } catch {
+          // 跳过宿主页给的坏数据
+        }
+      }
+      if (added > 0) {
+        dispatch({ type: "SET_NOTICE", notice: `已从宿主页导入 ${added} 件单品` });
+      }
     },
     [saveItem],
   );
@@ -464,17 +634,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const generate = useCallback(async () => {
+    if (state.generateMode === "stylist") {
+      // 帮我搭由 generateStylistPlans 编排
+      return;
+    }
     if (selectedItems.length === 0) {
       dispatch({ type: "SET_NOTICE", notice: "请先在搭配区加入单品" });
       return;
     }
+    const isTryonRun = state.generateMode === "tryon";
+    if (isTryonRun && deviceQuotaLeft() <= 0) {
+      dispatch({
+        type: "SET_NOTICE",
+        notice: `今日 AI 试衣次数已用完（${DEVICE_TRYON_DAILY_LIMIT} 次），明天恢复`,
+      });
+      return;
+    }
     dispatch({ type: "SET_GENERATING", value: true });
+    const controller = new AbortController();
+    generateAbortRef.current = controller;
+    // 总超时：试衣两轮最长约 4 分钟，其余路径远快于此
+    const timeout = window.setTimeout(
+      () => controller.abort(new DOMException("生成超时", "TimeoutError")),
+      300_000,
+    );
+    let budgetHit = false;
     try {
       const gender = resolveModelGender(state.modelChoice, selectedItems);
       const result = await generatePreview(selectedItems, state.imageUrls, {
         gender,
         modelSrc: state.customModelUrl ?? (await resolveModelSrc(gender)),
         mode: state.generateMode,
+        signal: controller.signal,
         onProgress: (text) => dispatch({ type: "SET_GENERATE_PROGRESS", text }),
       });
       dispatch({
@@ -483,6 +674,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         prompt: result.prompt,
         source: result.source,
       });
+      if (result.degradedLevel) {
+        reportEvent({ event: "tryon_degraded", level: result.degradedLevel, mode: "single" });
+      }
       if (result.warning) {
         dispatch({ type: "SET_NOTICE", notice: result.warning });
       } else if (result.source === "api") {
@@ -497,17 +691,251 @@ export function AppProvider({ children }: { children: ReactNode }) {
         });
       }
     } catch (error) {
-      dispatch({ type: "SET_GENERATING", value: false });
-      dispatch({
-        type: "SET_NOTICE",
-        notice: error instanceof Error ? error.message : "生成失败",
-      });
+      if (error instanceof BudgetExhaustedError) budgetHit = true;
+      if (controller.signal.aborted) {
+        const timeoutHit = controller.signal.reason instanceof DOMException && controller.signal.reason.name === "TimeoutError";
+        dispatch({ type: "SET_NOTICE", notice: timeoutHit ? "生成超时，请稍后重试" : "已取消生成" });
+      } else {
+        dispatch({
+          type: "SET_NOTICE",
+          notice: error instanceof Error ? error.message : "生成失败",
+        });
+      }
+    } finally {
+      window.clearTimeout(timeout);
+      generateAbortRef.current = null;
+      // 设备层配额：只在真实消耗试衣时计数；全局预算耗尽（服务端连坐）不计数
+      if (isTryonRun && !budgetHit) countDeviceTryon();
     }
   }, [selectedItems, state.imageUrls, state.modelChoice, state.generateMode, state.customModelUrl]);
+
+  const runPlan = useCallback(
+    async (plan: PlanCard, signal: AbortSignal) => {
+      let budgetHit = false;
+      const items = plan.itemIds
+        .map((id) => state.items.find((item) => item.id === id))
+        .filter((item): item is ClothingItem => Boolean(item));
+      if (items.length === 0) {
+        dispatch({ type: "PATCH_PLAN", id: plan.id, patch: { status: "failed", error: "单品图片缺失" } });
+        return;
+      }
+      dispatch({
+        type: "PATCH_PLAN",
+        id: plan.id,
+        patch: { status: "imaging", progressText: "搭配上身中…", error: undefined },
+      });
+      const urls: Record<string, string> = {};
+      for (const item of items) {
+        const url = state.imageUrls[item.imageId];
+        if (url) urls[item.imageId] = url;
+      }
+      const gender = resolveModelGender(state.modelChoice, items);
+      try {
+        const modelSrc = state.customModelUrl ?? (await resolveModelSrc(gender));
+        const result = await generatePreview(items, urls, {
+          gender,
+          modelSrc,
+          mode: "tryon",
+          signal,
+          onProgress: (text) => dispatch({ type: "PATCH_PLAN", id: plan.id, patch: { progressText: text } }),
+        });
+        if (result.qualityFailed) {
+          dispatch({
+            type: "PATCH_PLAN",
+            id: plan.id,
+            patch: { status: "noimage", error: "这套出图效果未达标，可点击重试" },
+          });
+        } else {
+          if (result.degradedLevel) {
+            reportEvent({ event: "tryon_degraded", level: result.degradedLevel, mode: "stylist" });
+          }
+          dispatch({
+            type: "PATCH_PLAN",
+            id: plan.id,
+            patch: {
+              status: "done",
+              url: result.url,
+              progressText: undefined,
+              degradedLevel: result.degradedLevel,
+            },
+          });
+        }
+      } catch (error) {
+        if (signal.aborted) throw error;
+        if (error instanceof BudgetExhaustedError) {
+          budgetHit = true;
+          dispatch({ type: "PATCH_PLAN", id: plan.id, patch: { progressText: "试衣额度已用完，出灵感图…" } });
+          try {
+            const modelSrc = state.customModelUrl ?? (await resolveModelSrc(gender));
+            const result = await generatePreview(items, urls, { gender, modelSrc, mode: "txt2img", signal });
+            dispatch({
+              type: "PATCH_PLAN",
+              id: plan.id,
+              patch: { status: "done", url: result.url, inspired: true },
+            });
+          } catch (fallbackError) {
+            if (signal.aborted) throw fallbackError;
+            dispatch({
+              type: "PATCH_PLAN",
+              id: plan.id,
+              patch: { status: "failed", error: "今日试衣额度已用完" },
+            });
+          }
+          return;
+        }
+        dispatch({
+          type: "PATCH_PLAN",
+          id: plan.id,
+          patch: { status: "failed", error: error instanceof Error ? error.message : "生成失败" },
+        });
+      } finally {
+        // 设备层配额按套计数；全局预算耗尽（服务端连坐）不计数
+        if (!budgetHit) countDeviceTryon();
+      }
+    },
+    [state.items, state.imageUrls, state.modelChoice, state.customModelUrl],
+  );
+
+  const generateStylistPlans = useCallback(
+    async (intent: string) => {
+      if (state.items.length === 0) {
+        dispatch({ type: "SET_NOTICE", notice: "衣橱还是空的，先导入几件单品" });
+        return;
+      }
+      if (!intent.trim()) {
+        dispatch({ type: "SET_NOTICE", notice: "说说场合或想要的感觉，比如：秋天通勤显干净" });
+        return;
+      }
+      if (deviceQuotaLeft() <= 0) {
+        dispatch({
+          type: "SET_NOTICE",
+          notice: `今日 AI 试衣次数已用完（${DEVICE_TRYON_DAILY_LIMIT} 次），明天恢复`,
+        });
+        return;
+      }
+      dispatch({ type: "SET_GENERATING", value: true });
+      dispatch({ type: "CLEAR_PLANS" });
+      const controller = new AbortController();
+      generateAbortRef.current = controller;
+      const timeout = window.setTimeout(
+        () => controller.abort(new DOMException("生成超时", "TimeoutError")),
+        600_000,
+      );
+      try {
+        const pref = summarizePreference();
+        const wardrobe = state.items.map((item) => ({
+          id: item.id,
+          name: item.name,
+          category: item.category,
+          color: item.color,
+          style: item.style,
+          material: item.material,
+          fit: item.fit,
+          pattern: item.pattern,
+          season: item.season,
+          occasion: item.occasion,
+          notes: item.notes,
+        }));
+        const response = await apiFetch<{
+          outfits?: Array<{ styleName: string; occasion: string; itemIds: string[]; reason: string; styleTags: string[] }>;
+          wardrobeGaps?: string[];
+          mode?: "llm" | "rule" | "inspire";
+        }>("/api/v1/stylist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ intent, outfitCount: 3, wardrobe, preference: pref.summary }),
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(errorMessage(response));
+        }
+        const outfits = response.data.outfits ?? [];
+        if (outfits.length === 0) {
+          dispatch({ type: "SET_NOTICE", notice: "没能组合出方案，试试补几件衣服或换个说法" });
+          dispatch({ type: "SET_GENERATING", value: false });
+          return;
+        }
+        const plans: PlanCard[] = outfits.map((outfit, index) => ({
+          id: "plan-" + index + "-" + Date.now(),
+          styleName: outfit.styleName || "方案 " + (index + 1),
+          occasion: outfit.occasion || "daily",
+          itemIds: outfit.itemIds,
+          reason: outfit.reason,
+          styleTags: outfit.styleTags,
+          status: "imaging",
+          progressText: "排队中",
+          source: response.data.mode === "llm" ? "llm" : "rule",
+        }));
+        dispatch({ type: "SET_PLANS", plans, gaps: response.data.wardrobeGaps ?? [] });
+        const queue = [...plans];
+        const worker = async () => {
+          while (queue.length > 0) {
+            const plan = queue.shift();
+            if (!plan) break;
+            await runPlan(plan, controller.signal);
+          }
+        };
+        await Promise.all([worker(), worker()]);
+        dispatch({ type: "SET_NOTICE", notice: "搭配方案已生成，点👍👎帮我更懂你" });
+      } catch (error) {
+        if (controller.signal.aborted) {
+          const timeoutHit =
+            controller.signal.reason instanceof DOMException && controller.signal.reason.name === "TimeoutError";
+          dispatch({ type: "SET_NOTICE", notice: timeoutHit ? "生成超时，请稍后重试" : "已取消生成" });
+        } else {
+          dispatch({ type: "SET_NOTICE", notice: error instanceof Error ? error.message : "搭配失败" });
+        }
+      } finally {
+        window.clearTimeout(timeout);
+        generateAbortRef.current = null;
+        dispatch({ type: "SET_GENERATING", value: false });
+      }
+    },
+    [state.items, state.modelChoice, state.customModelUrl, runPlan],
+  );
+
+  const retryPlan = useCallback(
+    async (id: string) => {
+      const plan = state.plans.find((entry) => entry.id === id);
+      if (!plan || plan.status === "imaging") return;
+      dispatch({ type: "SET_GENERATING", value: true });
+      const controller = new AbortController();
+      generateAbortRef.current = controller;
+      try {
+        await runPlan(plan, controller.signal);
+      } catch {
+        // runPlan 内部已处理失败展示
+      } finally {
+        generateAbortRef.current = null;
+        dispatch({ type: "SET_GENERATING", value: false });
+      }
+    },
+    [state.plans, runPlan],
+  );
+
+  const votePlan = useCallback(
+    (id: string, vote: 1 | -1) => {
+      const plan = state.plans.find((entry) => entry.id === id);
+      if (!plan) return;
+      addFeedback(vote, plan.styleTags, plan.occasion);
+      dispatch({ type: "SET_NOTICE", notice: vote === 1 ? "已记下你的喜好" : "好的，这类搭配会少推荐" });
+    },
+    [state.plans],
+  );
+
+  const cancelGenerate = useCallback(() => {
+    generateAbortRef.current?.abort(new DOMException("用户取消", "AbortError"));
+  }, []);
 
   const exportData = useCallback(async () => {
     const backup = await exportBackup(state.items, state.outfits);
     downloadJson(`outfit-backup-${new Date().toISOString().slice(0, 10)}.json`, backup);
+    try {
+      localStorage.setItem("ai-outfit-preview:last-backup", String(Date.now()));
+      localStorage.setItem("ai-outfit-preview:backup-dirty", "0");
+    } catch {
+      // 忽略
+    }
     dispatch({ type: "SET_NOTICE", notice: "备份已导出" });
   }, [state.items, state.outfits]);
 
@@ -520,6 +948,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       outfits: next.outfits,
       imageUrls: next.imageUrls,
     });
+    // 导入可能覆盖或保留了 IndexedDB 里的模特照，重新读取以同步显示
+    const customBlob = await getImage(CUSTOM_MODEL_ID);
+    dispatch({ type: "SET_CUSTOM_MODEL", url: customBlob ? URL.createObjectURL(customBlob) : null });
     dispatch({ type: "SET_NOTICE", notice: "备份已导入" });
   }, []);
 
@@ -538,6 +969,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     saveItem,
     removeItem,
     generate,
+    cancelGenerate,
+    generateStylistPlans,
+    retryPlan,
+    votePlan,
     exportData,
     importData,
     setFilters,
@@ -546,6 +981,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setCustomModelPhoto,
     clearCustomModelPhoto,
     addImageFiles,
+    addEmbeddedItems,
     setZoom,
     clearNotice,
   };

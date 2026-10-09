@@ -9,7 +9,7 @@ interface SeedSpec {
 
 export const SEED_ITEMS: SeedSpec[] = [
   {
-    file: "coat-red.png",
+    file: "coat-red.webp",
     item: {
       id: "seed-coat-red",
       name: "红色冬外套",
@@ -22,7 +22,7 @@ export const SEED_ITEMS: SeedSpec[] = [
     },
   },
   {
-    file: "jacket-orange.png",
+    file: "jacket-orange.webp",
     item: {
       id: "seed-jacket-orange",
       name: "橙色夹克",
@@ -35,7 +35,7 @@ export const SEED_ITEMS: SeedSpec[] = [
     },
   },
   {
-    file: "jacket-plaid.png",
+    file: "jacket-plaid.webp",
     item: {
       id: "seed-jacket-plaid",
       name: "格纹外套",
@@ -48,7 +48,7 @@ export const SEED_ITEMS: SeedSpec[] = [
     },
   },
   {
-    file: "skirt-grey.png",
+    file: "skirt-grey.webp",
     item: {
       id: "seed-skirt-grey",
       name: "灰色半裙",
@@ -61,7 +61,7 @@ export const SEED_ITEMS: SeedSpec[] = [
     },
   },
   {
-    file: "shoes-white.png",
+    file: "shoes-white.webp",
     item: {
       id: "seed-shoes-white",
       name: "白色运动鞋",
@@ -74,7 +74,7 @@ export const SEED_ITEMS: SeedSpec[] = [
     },
   },
   {
-    file: "bag-black.png",
+    file: "bag-black.webp",
     item: {
       id: "seed-bag-black",
       name: "黑色托特包",

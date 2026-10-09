@@ -19,7 +19,6 @@ export default defineConfig({
       name: "chromium",
       use: {
         ...devices["Desktop Chrome"],
-        channel: "msedge",
         viewport: { width: 1440, height: 900 },
       },
     },

@@ -1,19 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import type { GenerateMode } from "../lib/generate/adapter";
+import { apiFetch } from "../lib/apiClient";
 import { MODEL_ASSETS, resolveModelGender, type ModelChoice } from "../lib/models";
 import { useApp } from "../store";
 
 const MODEL_CHOICES: Array<{ id: ModelChoice; label: string }> = [
-  { id: "auto", label: "自动" },
+  { id: "auto", label: "女模" },
   { id: "female", label: "女模" },
   { id: "male", label: "男模" },
 ];
 
 const GEN_MODES: Array<{ id: GenerateMode; label: string; hint: string }> = [
+  { id: "stylist", label: "帮我搭", hint: "AI 从你的衣橱出 3 套方案" },
   { id: "tryon", label: "虚拟试衣", hint: "先内搭再外套 · 鞋包后补" },
   { id: "txt2img", label: "文生图", hint: "免费 · Kolors" },
   { id: "img2img", label: "图生图", hint: "约 ¥0.30/件 · Qwen 分层换装" },
 ];
+
+const SCENE_CHIPS = ["秋天通勤", "周末约会", "运动健身", "旅行拍照"];
 
 export function ResultPanel() {
   const {
@@ -33,18 +37,26 @@ export function ResultPanel() {
     customModelUrl,
     setCustomModelPhoto,
     clearCustomModelPhoto,
+    cancelGenerate,
+    imageUrls,
+    generateStylistPlans,
+    retryPlan,
+    votePlan,
+    plans,
+    planGaps,
+    items,
   } = useApp();
   const photoRef = useRef<HTMLInputElement>(null);
+  const [intent, setIntent] = useState("");
   const [apiReady, setApiReady] = useState(false);
   const [tryonReady, setTryonReady] = useState(false);
   const resolved = resolveModelGender(modelChoice, selectedItems);
 
   useEffect(() => {
-    void fetch("/api/preview")
-      .then((response) => response.json())
-      .then((data: { configured?: boolean; tryon?: boolean }) => {
-        setApiReady(Boolean(data.configured));
-        setTryonReady(Boolean(data.tryon));
+    void apiFetch<{ configured?: boolean; tryon?: boolean }>("/api/v1/capabilities")
+      .then((result) => {
+        setApiReady(Boolean(result.data.configured));
+        setTryonReady(Boolean(result.data.tryon));
       })
       .catch(() => {
         setApiReady(false);
@@ -63,7 +75,9 @@ export function ResultPanel() {
 
   const statusText = !apiReady
     ? "未配置 Key，使用本地合成"
-    : generateMode === "tryon"
+    : generateMode === "stylist"
+      ? generateProgress || "AI 搭配师 · 从衣橱出 3 套方案"
+      : generateMode === "tryon"
       ? generateProgress || (tryonReady ? "虚拟试衣 · 内搭后再穿外套" : "试衣未配置，将用 Qwen 兜底")
       : generateMode === "img2img"
         ? generateProgress || "图生图 · Qwen 分层换装"
@@ -90,10 +104,18 @@ export function ResultPanel() {
           className="btn primary"
           data-testid="generate-preview"
           disabled={generating}
-          onClick={() => void generate()}
+          onClick={() => {
+            if (generateMode === "stylist") void generateStylistPlans(intent);
+            else void generate();
+          }}
         >
-          {generating ? generateProgress || "生成中…" : "生成穿搭预览"}
+          {generating ? generateProgress || (generateMode === "stylist" ? "搭配中…" : "生成中…") : generateMode === "stylist" ? "帮我搭" : "生成穿搭预览"}
         </button>
+        {generating ? (
+          <button type="button" className="btn" data-testid="cancel-generate" onClick={cancelGenerate}>
+            取消
+          </button>
+        ) : null}
       </div>
 
       <div className="model-picker" data-testid="generate-mode">
@@ -164,14 +186,107 @@ export function ResultPanel() {
         </span>
       </div>
 
-      <div className="preview-stage">
-        {generating ? <div className="spinner" data-testid="generating" /> : null}
-        {previewUrl ? (
-          <img src={previewUrl} alt="穿搭预览" data-testid="preview-image" />
-        ) : (
-          <p className="empty-hint">{emptyHint}</p>
-        )}
-      </div>
+      {generateMode === "stylist" ? (
+        <div className="stylist-area">
+          <div className="stylist-bar">
+            <input
+              data-testid="stylist-intent"
+              placeholder="说说场合或感觉，比如：秋天通勤显干净"
+              value={intent}
+              onChange={(event) => setIntent(event.target.value)}
+            />
+          </div>
+          <div className="chips stylist-chips">
+            {SCENE_CHIPS.map((scene) => (
+              <button key={scene} type="button" className="chip" data-testid={`scene-${scene}`} onClick={() => setIntent(scene)}>
+                {scene}
+              </button>
+            ))}
+          </div>
+          {planGaps.length > 0 ? (
+            <p className="plan-gaps" data-testid="plan-gaps">
+              💡 {planGaps.join("；")}
+            </p>
+          ) : null}
+          <div className="plans" data-testid="plans">
+            {plans.map((plan, index) => (
+              <article key={plan.id} className={`plan-card plan-${plan.status}`} data-testid={`plan-card-${index}`}>
+                <div className="plan-media">
+                  {plan.status === "done" && plan.url ? (
+                    <img src={plan.url} alt={plan.styleName} data-testid={`plan-img-${index}`} />
+                  ) : plan.status === "imaging" ? (
+                    <div className="plan-loading">
+                      <div className="spinner" />
+                      <span>{plan.progressText || "生成中…"}</span>
+                    </div>
+                  ) : plan.status === "noimage" ? (
+                    <div className="plan-noimage">
+                      <div className="plan-thumbs">
+                        {plan.itemIds.map((itemId) => {
+                          const item = items.find((entry) => entry.id === itemId);
+                          const src = item ? imageUrls[item.imageId] : undefined;
+                          return src ? <img key={itemId} src={src} alt={item?.name ?? itemId} /> : null;
+                        })}
+                      </div>
+                      <span>{plan.error || "出图优化中"}</span>
+                    </div>
+                  ) : (
+                    <div className="plan-failed">
+                      <span>{plan.error || "生成失败"}</span>
+                      <button type="button" className="btn tiny" data-testid={`plan-retry-${index}`} onClick={() => void retryPlan(plan.id)}>
+                        重试这套
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <div className="plan-meta">
+                  <h3>
+                    {plan.styleName}
+                    {plan.degradedLevel === "qwen" ? <span className="mini-tag warn">备用模式 · 效果可能略有差异</span> : null}
+                    {plan.degradedLevel === "collage" ? <span className="mini-tag warn">简易模式 · 效果仅供参考</span> : null}
+                    {plan.inspired ? <span className="mini-tag">灵感参考</span> : null}
+                    {plan.source === "rule" ? <span className="mini-tag">基础模式</span> : null}
+                  </h3>
+                  <div className="tags">
+                    {plan.styleTags.map((tag) => (
+                      <span key={tag}>{tag}</span>
+                    ))}
+                  </div>
+                  {plan.reason ? <p>{plan.reason}</p> : null}
+                  <div className="plan-actions">
+                    <span className="plan-items">
+                      {plan.itemIds.length} 件 ·{" "}
+                      {plan.itemIds
+                        .map((itemId) => items.find((entry) => entry.id === itemId)?.name)
+                        .filter(Boolean)
+                        .join("、")}
+                    </span>
+                    {plan.status === "done" ? (
+                      <span className="plan-votes">
+                        <button type="button" className="btn tiny" data-testid={`plan-up-${index}`} onClick={() => votePlan(plan.id, 1)}>
+                          👍
+                        </button>
+                        <button type="button" className="btn tiny" data-testid={`plan-down-${index}`} onClick={() => votePlan(plan.id, -1)}>
+                          👎
+                        </button>
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="preview-stage">
+          {generating ? <div className="spinner" data-testid="generating" /> : null}
+          {previewUrl ? (
+            <img src={previewUrl} alt="穿搭预览" data-testid="preview-image" />
+          ) : (
+            <p className="empty-hint">{emptyHint}</p>
+          )}
+        </div>
+      )}
 
       {previewPrompt ? (
         <p className="prompt-box" data-testid="preview-prompt">
@@ -192,8 +307,11 @@ export function ResultPanel() {
                 data-testid={`outfit-${outfit.id}`}
                 onClick={() => loadOutfit(outfit.id)}
               >
-                {outfit.previewDataUrl ? (
-                  <img src={outfit.previewDataUrl} alt="已保存套装" />
+                {outfit.previewDataUrl || imageUrls[`outfit-img:${outfit.id}`] ? (
+                  <img
+                    src={outfit.previewDataUrl ?? imageUrls[`outfit-img:${outfit.id}`]}
+                    alt="已保存套装"
+                  />
                 ) : (
                   <span>{outfit.itemIds.length} 件</span>
                 )}
@@ -202,6 +320,8 @@ export function ResultPanel() {
           </div>
         </div>
       ) : null}
+
+      <p className="privacy-hint">隐私说明：使用 AI 生成时，你的全身照与衣物图会上传至阿里云百炼/硅基流动用于本次生成，不会公开展示；数据仅保存在你的浏览器本地。</p>
     </section>
   );
 }

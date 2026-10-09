@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { tryonBreaker } from "./breaker";
+import { logAiCall } from "./aiLog";
 
 export function parseEnvFile(filePath: string): Record<string, string> {
   if (!existsSync(filePath)) return {};
@@ -38,24 +39,14 @@ export function loadImageEnv() {
     DASHSCOPE_API_KEY: pick("DASHSCOPE_API_KEY"),
     DASHSCOPE_BASE: pick("DASHSCOPE_BASE") || "https://dashscope.aliyuncs.com",
     DASHSCOPE_TRYON_MODEL: pick("DASHSCOPE_TRYON_MODEL") || "aitryon-plus",
+    // 部署配置（与上游 key 同源读取，支持 .env）
+    ACCESS_TOKEN: pick("ACCESS_TOKEN"),
+    ALLOWED_ORIGINS: pick("ALLOWED_ORIGINS"),
+    PORT: pick("PORT"),
   };
 }
 
-export async function readBody(req: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
-export function sendJson(res: ServerResponse, status: number, body: unknown) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify(body));
-}
-
-async function toDataUrl(bytes: ArrayBuffer, mime = "image/png") {
+export async function toDataUrl(bytes: ArrayBuffer, mime = "image/png") {
   return `data:${mime};base64,${Buffer.from(bytes).toString("base64")}`;
 }
 
@@ -132,54 +123,92 @@ function pickTryonImageUrl(payload: Record<string, unknown>) {
   return null;
 }
 
+// 三件同穿能力探测：参数错误 → 永久缓存不支持；服务端错误 → 不缓存下次重试
+const tryonCaps: { thirdGarment: boolean | null } = { thirdGarment: null };
+
+function isParamError(status: number, message: string) {
+  return (
+    status >= 400 &&
+    status < 500 &&
+    /invalid|param|unknown|not\s?exist|unsupported|unexpected|too long|malformed/i.test(message)
+  );
+}
+
 export async function generateTryOnWithDashscope(
   env: Record<string, string>,
   person: string,
   top?: string,
   bottom?: string,
-) {
+  outer?: string,
+): Promise<string> {
   const key = env.DASHSCOPE_API_KEY?.trim();
   if (!key) {
     const error = new Error("no_tryon_key");
     (error as Error & { status: number }).status = 501;
     throw error;
   }
+  const started = Date.now();
   if (!top && !bottom) {
     throw new Error("虚拟试衣需要上衣或下装图片");
   }
   const base = (env.DASHSCOPE_BASE || "https://dashscope.aliyuncs.com").replace(/\/$/, "");
   const model = env.DASHSCOPE_TRYON_MODEL || "aitryon-plus";
   const personUrl = await uploadDashscopeOss(key, base, model, person, "person");
-  const input: Record<string, string> = { person_image_url: personUrl };
-  if (top) input.top_garment_url = await uploadDashscopeOss(key, base, model, top, "top");
-  if (bottom) input.bottom_garment_url = await uploadDashscopeOss(key, base, model, bottom, "bottom");
-
-  const submit = await fetch(`${base}/api/v1/services/aigc/image2image/image-synthesis/`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-      "X-DashScope-Async": "enable",
-      "X-DashScope-OssResourceResolve": "enable",
-    },
-    body: JSON.stringify({
-      model,
-      input,
-      parameters: { restore_face: true, resolution: -1 },
-    }),
-  });
-  const submitted = (await submit.json()) as {
-    output?: { task_id?: string; task_status?: string; message?: string };
-    message?: string;
-    code?: string;
+  const submitOnce = async (withOuter: boolean) => {
+    const input: Record<string, string> = { person_image_url: personUrl };
+    if (top) input.top_garment_url = await uploadDashscopeOss(key, base, model, top, "top");
+    if (bottom) input.bottom_garment_url = await uploadDashscopeOss(key, base, model, bottom, "bottom");
+    if (withOuter && outer) input.outer_garment_url = await uploadDashscopeOss(key, base, model, outer, "outer");
+    const submit = await fetch(`${base}/api/v1/services/aigc/image2image/image-synthesis/`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+        "X-DashScope-Async": "enable",
+        "X-DashScope-OssResourceResolve": "enable",
+      },
+      body: JSON.stringify({
+        model,
+        input,
+        parameters: { restore_face: true, resolution: -1 },
+      }),
+    });
+    const submitted = (await submit.json().catch(() => ({}))) as {
+      output?: { task_id?: string; task_status?: string; message?: string };
+      message?: string;
+      code?: string;
+    };
+    return { submit, submitted };
   };
+
+  const attemptOuter = Boolean(outer) && tryonCaps.thirdGarment !== false;
+  let { submit, submitted } = await submitOnce(attemptOuter);
+  if (attemptOuter && (!submit.ok || !submitted.output?.task_id)) {
+    const message = submitted.output?.message || submitted.message || submitted.code || "";
+    if (isParamError(submit.status, message)) {
+      // 服务端不认识第三槽位：永久记为不支持，回退两轮
+      tryonCaps.thirdGarment = false;
+      ({ submit, submitted } = await submitOnce(false));
+    }
+    // 5xx/网络类错误不缓存探测结论，下次仍会先试探
+  } else if (attemptOuter && submit.ok && submitted.output?.task_id) {
+    tryonCaps.thirdGarment = true;
+  }
+
   if (!submit.ok || !submitted.output?.task_id) {
-    throw new Error(
+    const message =
       submitted.output?.message ||
-        submitted.message ||
-        submitted.code ||
-        `试衣提交失败（HTTP ${submit.status}）`,
-    );
+      submitted.message ||
+      submitted.code ||
+      `试衣提交失败（HTTP ${submit.status}）`;
+    // 参数类错误（如三件同穿不被支持）是请求问题不是服务故障，不计熔断
+    if (!(attemptOuter && tryonCaps.thirdGarment === false && isParamError(submit.status, message))) {
+      tryonBreaker.recordFailure();
+    }
+    logAiCall({ call: "tryon", upstream: "dashscope", ms: Date.now() - started, ok: false, detail: message.slice(0, 120) });
+    const error = new Error(message);
+    (error as { upstreamStatus?: number }).upstreamStatus = submit.status;
+    throw error;
   }
 
   const taskId = submitted.output.task_id;
@@ -200,19 +229,54 @@ export async function generateTryOnWithDashscope(
     const status = data.output?.task_status;
     if (status === "SUCCEEDED") {
       const url = pickTryonImageUrl(data as Record<string, unknown>);
-      if (!url) throw new Error("试衣成功但没有返回图片");
-      const imgRes = await fetch(url);
-      const mime = imgRes.headers.get("content-type") || "image/jpeg";
-      return toDataUrl(await imgRes.arrayBuffer(), mime);
+      if (!url) {
+        tryonBreaker.recordFailure();
+        logAiCall({ call: "tryon", upstream: "dashscope", ms: Date.now() - started, ok: false, detail: "no image in result" });
+        throw new Error("试衣成功但没有返回图片");
+      }
+      tryonBreaker.recordSuccess();
+      logAiCall({ call: "tryon", upstream: "dashscope", ms: Date.now() - started, ok: true });
+      // 直传模式：返回签名 URL，由浏览器直拉，省服务器出口带宽
+      return url;
     }
     if (status === "FAILED" || status === "CANCELED" || status === "UNKNOWN") {
+      tryonBreaker.recordFailure();
+      logAiCall({ call: "tryon", upstream: "dashscope", ms: Date.now() - started, ok: false, detail: String(data.output?.message || status).slice(0, 120) });
       throw new Error(data.output?.message || `试衣失败（${status}）`);
     }
   }
+  tryonBreaker.recordFailure();
+  logAiCall({ call: "tryon", upstream: "dashscope", ms: Date.now() - started, ok: false, detail: "poll timeout" });
   throw new Error("试衣超时，请稍后重试");
 }
 
 export async function generateWithApi(
+  env: Record<string, string>,
+  prompt: string,
+  image?: string,
+  negativePrompt?: string,
+  mode: "txt2img" | "img2img" = "txt2img",
+  image2?: string,
+  image3?: string,
+) {
+  const started = Date.now();
+  try {
+    const result = await generateWithApiInner(env, prompt, image, negativePrompt, mode, image2, image3);
+    logAiCall({ call: mode, upstream: "siliconflow", ms: Date.now() - started, ok: true });
+    return result;
+  } catch (error) {
+    logAiCall({
+      call: mode,
+      upstream: "siliconflow",
+      ms: Date.now() - started,
+      ok: false,
+      detail: error instanceof Error ? error.message.slice(0, 120) : undefined,
+    });
+    throw error;
+  }
+}
+
+async function generateWithApiInner(
   env: Record<string, string>,
   prompt: string,
   image?: string,
@@ -270,7 +334,9 @@ export async function generateWithApi(
 
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(`upstream ${response.status}: ${text.slice(0, 400)}`);
+    const error = new Error(`upstream ${response.status}: ${text.slice(0, 400)}`);
+    (error as { upstreamStatus?: number }).upstreamStatus = response.status;
+    throw error;
   }
 
   const data = JSON.parse(text) as {
@@ -283,69 +349,8 @@ export async function generateWithApi(
     return raw.startsWith("data:") ? raw : `data:image/png;base64,${raw}`;
   }
   if (first?.url) {
-    const imgRes = await fetch(first.url);
-    const mime = imgRes.headers.get("content-type") || "image/png";
-    return toDataUrl(await imgRes.arrayBuffer(), mime);
+    // 直传模式：上游给 URL 就透传，浏览器直拉
+    return first.url;
   }
   throw new Error("no image in upstream response");
-}
-
-export async function handlePreviewRequest(req: IncomingMessage, res: ServerResponse) {
-  if (req.method === "GET") {
-    const env = loadImageEnv();
-    sendJson(res, 200, {
-      configured: Boolean(env.IMAGE_API_KEY || env.DASHSCOPE_API_KEY),
-      tryon: Boolean(env.DASHSCOPE_API_KEY),
-      image: Boolean(env.IMAGE_API_KEY),
-    });
-    return;
-  }
-  if (req.method !== "POST") {
-    sendJson(res, 405, { error: "method_not_allowed" });
-    return;
-  }
-  try {
-    const body = JSON.parse((await readBody(req)) || "{}") as {
-      prompt?: string;
-      negativePrompt?: string;
-      image?: string;
-      image2?: string;
-      image3?: string;
-      mode?: "txt2img" | "img2img" | "tryon";
-      person?: string;
-      top?: string;
-      bottom?: string;
-    };
-    const env = loadImageEnv();
-    if (body.mode === "tryon") {
-      if (!body.person?.trim()) {
-        sendJson(res, 400, { error: "missing_person" });
-        return;
-      }
-      const image = await generateTryOnWithDashscope(env, body.person, body.top, body.bottom);
-      sendJson(res, 200, { image, source: "tryon" });
-      return;
-    }
-    const prompt = body.prompt?.trim();
-    if (!prompt) {
-      sendJson(res, 400, { error: "missing_prompt" });
-      return;
-    }
-    const mode = body.mode === "img2img" ? "img2img" : "txt2img";
-    const image = await generateWithApi(
-      env,
-      prompt,
-      body.image,
-      body.negativePrompt,
-      mode,
-      body.image2,
-      body.image3,
-    );
-    sendJson(res, 200, { image, source: "api" });
-  } catch (error) {
-    const status = (error as { status?: number }).status ?? 502;
-    sendJson(res, status, {
-      error: error instanceof Error ? error.message : "generate_failed",
-    });
-  }
 }

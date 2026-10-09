@@ -19,6 +19,11 @@ export interface ClothingItem {
   occasion: Occasion;
   notes?: string;
   imageId: string;
+  /** 风格/材质/版型/图案：自动打标或手填，供 AI 搭配师参考 */
+  style?: string;
+  material?: string;
+  fit?: string;
+  pattern?: string;
 }
 
 export interface Outfit {

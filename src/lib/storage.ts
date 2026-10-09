@@ -22,11 +22,29 @@ export function loadOutfits(): Outfit[] {
 }
 
 export function saveItems(items: ClothingItem[]) {
-  localStorage.setItem(ITEMS_KEY, JSON.stringify(items));
+  // 图片本体在 IndexedDB，items 里只有元数据，写失败只影响元数据持久化
+  try {
+    localStorage.setItem(ITEMS_KEY, JSON.stringify(items));
+  } catch {
+    // 配额不足时放弃本次写入，不阻塞应用
+  }
 }
 
 export function saveOutfits(outfits: Outfit[]) {
-  localStorage.setItem(OUTFITS_KEY, JSON.stringify(outfits));
+  // outfits 含预览图 base64（单张可达数 MB），容易触发配额：从最旧的开始丢，保住应用不崩
+  for (let count = outfits.length; count > 0; count -= 1) {
+    try {
+      localStorage.setItem(OUTFITS_KEY, JSON.stringify(outfits.slice(0, count)));
+      return;
+    } catch {
+      // 继续丢更旧的
+    }
+  }
+  try {
+    localStorage.setItem(OUTFITS_KEY, "[]");
+  } catch {
+    // 全部放弃
+  }
 }
 
 export function hasSeededFlag() {

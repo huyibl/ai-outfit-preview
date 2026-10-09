@@ -10,6 +10,10 @@ interface FormState {
   season: Season;
   occasion: Occasion;
   notes: string;
+  style: string;
+  material: string;
+  fit: string;
+  pattern: string;
   file?: File;
 }
 
@@ -20,6 +24,10 @@ const emptyForm: FormState = {
   season: "all",
   occasion: "daily",
   notes: "",
+  style: "",
+  material: "",
+  fit: "",
+  pattern: "",
 };
 
 export function ItemModal() {
@@ -42,6 +50,10 @@ export function ItemModal() {
           season: item.season,
           occasion: item.occasion,
           notes: item.notes ?? "",
+          style: item.style ?? "",
+          material: item.material ?? "",
+          fit: item.fit ?? "",
+          pattern: item.pattern ?? "",
         });
         return;
       }
@@ -81,6 +93,10 @@ export function ItemModal() {
               season: form.season,
               occasion: form.occasion,
               notes: form.notes.trim(),
+              style: form.style.trim() || undefined,
+              material: form.material.trim() || undefined,
+              fit: form.fit.trim() || undefined,
+              pattern: form.pattern.trim() || undefined,
               file: form.file,
             });
           } catch (err) {
@@ -168,6 +184,26 @@ export function ItemModal() {
             onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))}
           />
         </label>
+        <div className="select-row">
+          <label>
+            风格
+            <input placeholder="极简/复古…" value={form.style} onChange={(event) => setForm((current) => ({ ...current, style: event.target.value }))} />
+          </label>
+          <label>
+            材质
+            <input placeholder="针织/牛仔…" value={form.material} onChange={(event) => setForm((current) => ({ ...current, material: event.target.value }))} />
+          </label>
+        </div>
+        <div className="select-row">
+          <label>
+            版型
+            <input placeholder="宽松/修身…" value={form.fit} onChange={(event) => setForm((current) => ({ ...current, fit: event.target.value }))} />
+          </label>
+          <label>
+            图案
+            <input placeholder="纯色/格纹…" value={form.pattern} onChange={(event) => setForm((current) => ({ ...current, pattern: event.target.value }))} />
+          </label>
+        </div>
         {error ? <p className="form-error">{error}</p> : null}
         <div className="modal-actions">
           {editing ? (

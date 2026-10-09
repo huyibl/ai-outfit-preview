@@ -3,15 +3,22 @@ import { extname, resolve } from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { handlePreviewRequest } from "./server/previewApi";
+import { handleApiRequest } from "./server/api";
 
 function previewApiPlugin() {
   const handler = async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
-    if (!req.url?.startsWith("/api/preview")) {
+    const url = (req.url ?? "").split("?")[0];
+    if (url !== "/api/preview" && !url.startsWith("/api/v1/")) {
       next();
       return;
     }
-    await handlePreviewRequest(req, res);
+    try {
+      await handleApiRequest(req, res);
+    } catch (error) {
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.end(JSON.stringify({ error: { code: "internal", message: String(error) } }));
+    }
   };
 
   return {

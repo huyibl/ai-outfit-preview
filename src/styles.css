@@ -57,6 +57,23 @@ select {
   font-weight: 700;
 }
 
+.token-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 20px;
+  background: #fef3c7;
+  border-bottom: 1px solid #f59e0b;
+  font-size: 13px;
+}
+
+.token-banner input {
+  flex: 0 1 280px;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  padding: 5px 10px;
+}
+
 .topbar-actions,
 .canvas-toolbar,
 .item-actions,
@@ -543,6 +560,36 @@ select,
   font-size: 12px;
 }
 
+.mobile-tabs {
+  display: none;
+}
+
+.privacy-hint {
+  margin: 10px 16px 12px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* iframe 嵌入模式：无顶栏/Tab，衣橱隐藏，双栏 */
+.app.embed .topbar,
+.app.embed .mobile-tabs,
+.app.embed .token-banner {
+  display: none;
+}
+
+.app.embed .workspace .wardrobe {
+  display: none;
+}
+
+.app.embed .workspace {
+  grid-template-columns: minmax(360px, 1fr) minmax(360px, 480px);
+}
+
+.app.embed .workspace .canvas-panel,
+.app.embed .workspace .result {
+  display: flex;
+}
+
 @media (max-width: 1100px) {
   .workspace {
     grid-template-columns: 1fr;
@@ -553,4 +600,211 @@ select,
   .canvas-panel {
     min-height: 520px;
   }
+}
+
+@media (max-width: 900px) {
+  .workspace {
+    display: block;
+    padding: 12px;
+  }
+
+  /* 窄屏只显示当前 Tab 的面板 */
+  .workspace .wardrobe,
+  .workspace .canvas-panel,
+  .workspace .result {
+    display: none;
+    min-height: 0;
+  }
+
+  .workspace.tab-wardrobe .wardrobe,
+  .workspace.tab-canvas .canvas-panel,
+  .workspace.tab-result .result {
+    display: flex;
+    margin-bottom: 12px;
+  }
+
+  .mobile-tabs {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 15;
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    padding: 10px;
+    background: var(--card);
+    border-top: 1px solid var(--line);
+  }
+
+  .mobile-tabs .chip {
+    padding: 10px 22px;
+    font-size: 15px;
+  }
+
+  .toast {
+    bottom: 72px;
+  }
+
+  .topbar {
+    padding: 10px 12px;
+  }
+
+  .preview-stage {
+    min-height: 320px;
+  }
+}
+
+/* ---- AI 搭配师方案卡片 ---- */
+.stylist-area {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 0 16px 16px;
+  gap: 10px;
+}
+
+.stylist-bar input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fff;
+}
+
+.stylist-chips {
+  flex-wrap: wrap;
+}
+
+.plan-gaps {
+  margin: 0;
+  font-size: 12px;
+  color: #92400e;
+  background: #fef3c7;
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.plans {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+}
+
+.plan-card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  background: #fff;
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 10px;
+  padding: 10px;
+}
+
+.plan-card.plan-failed,
+.plan-card.plan-noimage {
+  opacity: 0.75;
+}
+
+.plan-media {
+  background: #f8f8f8;
+  border-radius: 10px;
+  overflow: hidden;
+  min-height: 150px;
+  display: grid;
+  place-items: center;
+}
+
+.plan-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.plan-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 10px;
+  text-align: center;
+}
+
+.plan-loading .spinner {
+  position: static;
+  margin: 0;
+  width: 26px;
+  height: 26px;
+}
+
+.plan-noimage,
+.plan-failed {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 8px;
+  text-align: center;
+}
+
+.plan-thumbs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.plan-thumbs img {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+.plan-meta h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.plan-meta p {
+  margin: 6px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.plan-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.plan-items {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-votes {
+  display: flex;
+  gap: 4px;
+}
+
+.mini-tag.warn {
+  background: #fef3c7;
+  color: #92400e;
 }

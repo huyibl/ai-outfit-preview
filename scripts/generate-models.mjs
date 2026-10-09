@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import sharp from "sharp";
 
 function loadEnv() {
   const out = {};
@@ -71,7 +72,8 @@ mkdirSync(dir, { recursive: true });
 for (const gender of ["female", "male"]) {
   process.stdout.write(`generating ${gender} model...\n`);
   const bytes = await generateOne(env, gender);
-  const dest = resolve(dir, `${gender}.jpg`);
-  writeFileSync(dest, bytes);
-  process.stdout.write(`wrote ${dest} (${bytes.length} bytes)\n`);
+  const webp = await sharp(bytes).resize({ height: 1600 }).webp({ quality: 85 }).toBuffer();
+  const dest = resolve(dir, `${gender}.webp`);
+  writeFileSync(dest, webp);
+  process.stdout.write(`wrote ${dest} (${webp.length} bytes)\n`);
 }
