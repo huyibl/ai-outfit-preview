@@ -18,5 +18,10 @@ jobs:
       - run: npm run build
       - name: 构建产物不得包含 key 痕迹
         run: |
-          ! grep -rli "sk-\|DASHSCOPE_API_KEY\|IMAGE_API_KEY" dist/
+          matches=$(grep -rli --binary-files=without-match "sk-\|DASHSCOPE_API_KEY\|IMAGE_API_KEY" dist/ || true)
+          if [ -n "$matches" ]; then
+            echo "发现疑似 key 泄露："
+            grep -rin --binary-files=without-match "sk-\|DASHSCOPE_API_KEY\|IMAGE_API_KEY" $matches | head -5
+            exit 1
+          fi
       - run: npm test
